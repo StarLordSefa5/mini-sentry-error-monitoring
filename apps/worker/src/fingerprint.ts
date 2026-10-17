@@ -76,3 +76,11 @@ export function fingerprint(event: Pick<ErrorEvent, "type" | "message" | "frames
   ];
   return createHash("sha256").update(parts.join("\n")).digest("hex");
 }
+
+/** Human-readable location for the issue list, e.g. `checkout in /assets/cart.js`. */
+export function culprit(frames: StackFrame[]): string | null {
+  const top = frames.find(isAppFrame) ?? frames[0];
+  if (!top) return null;
+  const file = normalizeFilename(top.filename);
+  return top.function ? `${normalizeFunction(top.function)} in ${file}` : file;
+}

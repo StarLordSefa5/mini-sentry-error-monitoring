@@ -60,6 +60,8 @@ model Issue {
   fingerprint String
   type        String
   message     String
+  /// Where it happened, e.g. "checkout in /assets/cart.js": the top in-app frame of the first event.
+  culprit     String?
   status      IssueStatus @default(unresolved)
   count       Int         @default(0)
   firstSeen   DateTime    @default(now())
@@ -68,6 +70,7 @@ model Issue {
 
   @@unique([projectId, fingerprint])
   @@index([projectId, lastSeen])
+  @@index([projectId, status, lastSeen])
 }
 
 /// A single error occurrence as sent by the SDK.
@@ -93,5 +96,5 @@ model Event {
   receivedAt  DateTime @default(now())
 
   @@index([projectId, receivedAt])
-  @@index([issueId, timestamp])
+  @@index([issueId, receivedAt])
 }

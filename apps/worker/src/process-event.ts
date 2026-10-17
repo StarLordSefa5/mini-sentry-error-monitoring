@@ -1,6 +1,6 @@
 import { Prisma, type PrismaClient } from "@mini-sentry/db";
 import type { IngestJobData } from "@mini-sentry/shared";
-import { fingerprint } from "./fingerprint.js";
+import { culprit, fingerprint } from "./fingerprint.js";
 
 export type ProcessResult =
   | { status: "stored"; issueId: string; newIssue: boolean }
@@ -36,9 +36,9 @@ export async function processEvent(
       // One statement, so concurrent events for the same issue cannot lose an increment or move
       // lastSeen backwards (jobs can finish out of order).
       const [issue] = await tx.$queryRaw<{ id: string; inserted: boolean }[]>`
-        INSERT INTO "Issue" ("projectId", "fingerprint", "type", "message", "count", "firstSeen", "lastSeen")
+        INSERT INTO "Issue" ("projectId", "fingerprint", "type", "message", "culprit", "count", "firstSeen", "lastSeen")
         VALUES (
-          ${projectId}, ${hash}, ${event.type}, ${event.message}, 1,
+          ${projectId}, ${hash}, ${event.type}, ${event.message}, ${culprit(event.frames)}, 1,
           (${seenAt}::timestamptz AT TIME ZONE 'UTC'), (${seenAt}::timestamptz AT TIME ZONE 'UTC')
         )
         ON CONFLICT ("projectId", "fingerprint") DO UPDATE SET

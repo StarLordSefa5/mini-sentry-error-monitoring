@@ -1,6 +1,7 @@
 import type { StackFrame } from "@mini-sentry/shared";
 import { describe, expect, it } from "vitest";
 import {
+  culprit,
   fingerprint,
   normalizeFilename,
   normalizeFunction,
@@ -142,5 +143,21 @@ describe("normalizeFunction", () => {
     [undefined, "?"],
   ])("%s", (input, expected) => {
     expect(normalizeFunction(input)).toBe(expected);
+  });
+});
+
+describe("culprit", () => {
+  it("names the top in-app frame", () => {
+    expect(
+      culprit([
+        { filename: "/srv/app/node_modules/pg/lib/client.js", function: "Client.connect" },
+        { filename: "https://x.com/assets/cart-BxK3a9Qz.js?v=1", function: "async checkout" },
+      ]),
+    ).toBe("checkout in /assets/cart.js");
+  });
+
+  it("falls back to the file, or null without frames", () => {
+    expect(culprit([{ filename: "/src/a.js" }])).toBe("/src/a.js");
+    expect(culprit([])).toBeNull();
   });
 });
