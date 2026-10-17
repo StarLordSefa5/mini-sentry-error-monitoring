@@ -1,0 +1,36 @@
+{
+  "name": "@mini-sentry/cli",
+  "version": "0.1.0",
+  "description": "Command-line tool for Mini Sentry: upload source maps from CI.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "mini-sentry": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "tsup": "^9.0.0",
+    "vitest": "^5.0.5"
+  },
+  "author": "Sefa",
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "error-monitoring",
+    "source-maps",
+    "cli"
+  ]
+}
