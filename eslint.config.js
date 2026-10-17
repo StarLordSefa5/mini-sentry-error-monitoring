@@ -9,6 +9,7 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   { files: ["**/*.{js,mjs,cjs}"], languageOptions: { globals: globals.node } },
+  { files: ["examples/minified/src/**/*.js"], languageOptions: { globals: globals.browser } },
   {
     files: ["apps/dashboard/src/**/*.{ts,tsx}"],
     ...reactHooks.configs.flat.recommended,

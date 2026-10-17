@@ -1,5 +1,5 @@
-// Tiny static server for the browser example. Serves examples/browser at / and the built SDK at
-// /sdk/. Nothing else in the repo is reachable.
+// Tiny static server for the examples. Serves examples/browser at /, the built SDK at /sdk/ and
+// the minified example at /minified/. Nothing else in the repo is reachable.
 import { createReadStream, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, normalize, resolve, sep } from "node:path";
@@ -7,6 +7,7 @@ import { extname, join, normalize, resolve, sep } from "node:path";
 const here = import.meta.dirname;
 const roots = {
   "/sdk/": resolve(here, "../packages/sdk/dist"),
+  "/minified/": resolve(here, "minified/dist"),
   "/": resolve(here, "browser"),
 };
 const types = { ".html": "text/html", ".js": "text/javascript", ".map": "application/json" };

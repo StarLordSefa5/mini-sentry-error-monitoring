@@ -2,7 +2,7 @@
 
 Open-source error monitoring service. Add the SDK to your app; errors from real users are sent to the server, grouped into issues by stack-trace fingerprint, shown on a dashboard, and announced on Slack/Discord when something new breaks.
 
-> Status: week 6 of 8. Adds Discord/Slack alerts, per-project rate limiting and breadcrumbs.
+> Status: week 7 of 8. Adds source map support and prepares the SDK and CLI for npm.
 
 ## Architecture
 
@@ -19,6 +19,7 @@ Read path:   Dashboard ──▶ Dashboard API ──▶ PostgreSQL
 | `apps/worker`     | Processes queued events, groups issues        |
 | `apps/dashboard`  | React dashboard                               |
 | `packages/db`     | Prisma schema, migrations and client          |
+| `packages/cli`    | `mini-sentry` CLI: source map upload          |
 | `packages/notify` | Discord/Slack webhook formatting and delivery |
 | `packages/sdk`    | SDK published to npm                          |
 | `packages/shared` | Shared wire and API types                     |
@@ -85,24 +86,28 @@ node examples/node/crash.mjs "<DSN>" rejection
 
 ## API
 
-| Method | Path                                                                       | Auth    |
-| ------ | -------------------------------------------------------------------------- | ------- |
-| POST   | `/api/:projectId/events`                                                   | API key |
-| POST   | `/api/auth/register`                                                       | —       |
-| POST   | `/api/auth/login`                                                          | —       |
-| POST   | `/api/auth/logout`                                                         | —       |
-| GET    | `/api/auth/me`                                                             | session |
-| GET    | `/api/projects`                                                            | session |
-| POST   | `/api/projects`                                                            | session |
-| GET    | `/api/projects/:projectId`                                                 | session |
-| POST   | `/api/projects/:projectId/api-key/rotate`                                  | session |
-| GET    | `/api/projects/:projectId/issues` (`status`, `q`, `sort`, `page`, `limit`) | session |
-| GET    | `/api/projects/:projectId/issues/:issueId`                                 | session |
-| PATCH  | `/api/projects/:projectId` (`name`, `alertWebhookUrl`)                     | session |
-| POST   | `/api/projects/:projectId/alerts/test`                                     | session |
-| PATCH  | `/api/projects/:projectId/issues/:issueId` (`status`)                      | session |
-| GET    | `/api/projects/:projectId/issues/:issueId/events`                          | session |
-| GET    | `/api/projects/:projectId/issues/:issueId/stats` (`range`: `24h` or `7d`)  | session |
+| Method | Path                                                                       | Auth         |
+| ------ | -------------------------------------------------------------------------- | ------------ |
+| POST   | `/api/:projectId/events`                                                   | API key      |
+| POST   | `/api/auth/register`                                                       | —            |
+| POST   | `/api/auth/login`                                                          | —            |
+| POST   | `/api/auth/logout`                                                         | —            |
+| GET    | `/api/auth/me`                                                             | session      |
+| GET    | `/api/projects`                                                            | session      |
+| POST   | `/api/projects`                                                            | session      |
+| GET    | `/api/projects/:projectId`                                                 | session      |
+| POST   | `/api/projects/:projectId/api-key/rotate`                                  | session      |
+| GET    | `/api/projects/:projectId/issues` (`status`, `q`, `sort`, `page`, `limit`) | session      |
+| GET    | `/api/projects/:projectId/issues/:issueId`                                 | session      |
+| PATCH  | `/api/projects/:projectId` (`name`, `alertWebhookUrl`)                     | session      |
+| POST   | `/api/projects/:projectId/alerts/test`                                     | session      |
+| POST   | `/api/projects/:projectId/upload-token`                                    | session      |
+| GET    | `/api/projects/:projectId/sourcemaps`                                      | session      |
+| DELETE | `/api/projects/:projectId/sourcemaps/:release`                             | session      |
+| PUT    | `/api/:projectId/releases/:release/sourcemaps?file=`                       | upload token |
+| PATCH  | `/api/projects/:projectId/issues/:issueId` (`status`)                      | session      |
+| GET    | `/api/projects/:projectId/issues/:issueId/events`                          | session      |
+| GET    | `/api/projects/:projectId/issues/:issueId/stats` (`range`: `24h` or `7d`)  | session      |
 
 ## Dashboard
 
@@ -114,6 +119,31 @@ React + Vite + TypeScript, TanStack Query for data fetching and caching, React R
 - **Settings**: DSN and API key with copy buttons, SDK install snippets for browser and Node.js, a "send a test error" button, key rotation.
 
 In development Vite proxies `/api` to the API, so the session cookie is same-origin.
+
+## Source maps
+
+Production code is minified, so a raw stack trace says `S at main-Z2SKI4QC.js:2:4128`. With source maps uploaded for the release, the same error shows `cartTotal in src/cart.js:8:30` and the surrounding lines of the original code.
+
+1. Build with source maps (e.g. Vite `build.sourcemap: true`).
+2. In the project's settings, create an upload token and store it as a CI secret.
+3. After each build, upload the maps for the release you pass to the SDK:
+
+```bash
+MINI_SENTRY_UPLOAD_TOKEN=mss_… npx @mini-sentry/cli sourcemaps upload dist   --release my-app@1.4.0 --dsn "<DSN>" --delete-after
+```
+
+The worker rewrites each frame before grouping, so issues are grouped by original file and function names, which stay the same across deploys. Try it with `examples/minified` (`node examples/minified/build.mjs`, then open `http://localhost:5500/minified/?dsn=<DSN>`).
+
+## Publishing the SDK and CLI
+
+Versions and changelogs are managed with [Changesets](https://github.com/changesets/changesets):
+
+```bash
+pnpm changeset          # describe a change to @mini-sentry/sdk or @mini-sentry/cli
+pnpm version-packages   # bump versions, write CHANGELOG.md
+npm login
+pnpm release            # build and publish to npm
+```
 
 ## Alerts
 
@@ -167,3 +197,8 @@ Line and column numbers are left out on purpose: editing an unrelated part of a 
 - **Rate limits are a Redis fixed window** (`INCR` + `EXPIRE` per project per minute), shared by every API instance. `INCR` is atomic, so concurrent requests cannot both slip under the limit. Invalid keys are rejected before counting, so they cannot use up a project's budget.
 - **Breadcrumbs drop query strings and never record input values**, since both often carry tokens or personal data.
 - **Known gap:** an alert is queued after the event's transaction commits. If that enqueue fails, the retried job sees the event as already stored and the alert is lost. A transactional outbox table would close this.
+- **Source map uploads need a separate secret token.** The API key is public by design (it is in every visitor's browser), so it must not be able to upload maps: a forged map would make stack traces lie. Only the token's SHA-256 hash is stored, and it is shown once.
+- **Frames are resolved before fingerprinting.** Minified names and bundle hashes change with every deploy; original file and function names do not. Resolving first keeps one issue per bug across releases.
+- **Parsed source maps are cached in the worker** (LRU, 50 maps). Parsing a large map takes milliseconds and the WebAssembly-backed parser needs explicit cleanup, so maps are parsed once, concurrent frames share one parse, and evicted maps are destroyed. A missing map is remembered for a minute.
+- **Function names come from the original source, not the map's `names`.** A map names the token at the error position (often a property such as `total`), so the worker scans the original code upwards for the enclosing function, arrow or method declaration.
+- **Source maps are stored in Postgres** for simplicity. Object storage (S3) would be the next step for large apps.
