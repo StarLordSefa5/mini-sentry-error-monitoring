@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@mini-sentry/db": "workspace:*",
+    "@mini-sentry/notify": "workspace:*",
     "@mini-sentry/shared": "workspace:*",
     "bullmq": "^6.3.16",
     "ioredis": "^6.0.0",

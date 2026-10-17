@@ -110,6 +110,50 @@ describe.skipIf(!databaseUrl)("processEvent", () => {
     expect(issue.lastSeen.toISOString()).toBe(late.toISOString());
   });
 
+  it("reopens a resolved issue once and reports it as a regression", async () => {
+    const first = await processEvent(prisma, job());
+    if (first.status !== "stored") throw new Error("not stored");
+    expect(first).toMatchObject({ newIssue: true, regressed: false });
+
+    await prisma.issue.update({ where: { id: first.issueId }, data: { status: "resolved" } });
+    // Two events arrive at once for the resolved issue: exactly one of them is the regression.
+    const results = await Promise.all([processEvent(prisma, job()), processEvent(prisma, job())]);
+    expect(results.filter((r) => r.status === "stored" && r.regressed)).toHaveLength(1);
+
+    const issue = await prisma.issue.findUniqueOrThrow({ where: { id: first.issueId } });
+    expect(issue).toMatchObject({ status: "unresolved", count: 3 });
+  });
+
+  it("keeps ignored issues ignored and silent", async () => {
+    const first = await processEvent(prisma, job());
+    if (first.status !== "stored") throw new Error("not stored");
+    await prisma.issue.update({ where: { id: first.issueId }, data: { status: "ignored" } });
+
+    const again = await processEvent(prisma, job());
+    expect(again).toMatchObject({ newIssue: false, regressed: false });
+    const issue = await prisma.issue.findUniqueOrThrow({ where: { id: first.issueId } });
+    expect(issue.status).toBe("ignored");
+  });
+
+  it("stores breadcrumbs with the event", async () => {
+    const withCrumbs = job({
+      breadcrumbs: [
+        { type: "click", timestamp: new Date().toISOString(), message: "button#pay" },
+        {
+          type: "fetch",
+          timestamp: new Date().toISOString(),
+          message: "POST /api/pay",
+          data: { status: 500 },
+        },
+      ],
+    });
+    await processEvent(prisma, withCrumbs);
+    const stored = await prisma.event.findUniqueOrThrow({
+      where: { eventId: withCrumbs.event.eventId },
+    });
+    expect(stored.breadcrumbs).toEqual(withCrumbs.event.breadcrumbs);
+  });
+
   it("drops events for a project deleted after ingestion", async () => {
     const orphan = job();
     await prisma.project.delete({ where: { id: projectId } });

@@ -1,12 +1,15 @@
 import { createPrismaClient } from "@mini-sentry/db";
 import {
+  ALERTS_QUEUE,
   EVENTS_DEAD_LETTER_QUEUE,
   EVENTS_QUEUE,
+  type AlertJobData,
   type DeadLetterJobData,
   type IngestJobData,
 } from "@mini-sentry/shared";
 import { Queue, Worker } from "bullmq";
 import { Redis } from "ioredis";
+import { deliverAlert, type AlertResult } from "./alerts.js";
 import { loadConfig } from "./config.js";
 import { processEvent, type ProcessResult } from "./process-event.js";
 
@@ -20,11 +23,63 @@ const deadLetter = new Queue<DeadLetterJobData>(EVENTS_DEAD_LETTER_QUEUE, {
   connection: deadLetterConnection,
 });
 
+const alertsConnection = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
+const alerts = new Queue<AlertJobData>(ALERTS_QUEUE, {
+  connection: alertsConnection,
+  defaultJobOptions: {
+    attempts: 5,
+    backoff: { type: "exponential", delay: 2000 },
+    removeOnComplete: { age: 24 * 3600 },
+    removeOnFail: { age: 7 * 24 * 3600 },
+  },
+});
+
 const worker = new Worker<IngestJobData, ProcessResult>(
   EVENTS_QUEUE,
-  (job) => processEvent(prisma, job.data),
+  async (job) => {
+    const result = await processEvent(prisma, job.data);
+    if (result.status === "stored" && (result.newIssue || result.regressed)) {
+      // Alerts go to their own queue: a slow or failing webhook gets its own retries and never
+      // holds up grouping. The event is already committed at this point; if this enqueue fails,
+      // the job retries, finds the event stored, and the alert is lost. A transactional outbox
+      // would close that gap.
+      await alerts.add(
+        "alert",
+        {
+          kind: result.newIssue ? "new_issue" : "regression",
+          projectId: job.data.projectId,
+          issueId: result.issueId,
+          eventId: job.data.event.eventId,
+        },
+        { jobId: `alert-${job.data.event.eventId}` },
+      );
+    }
+    return result;
+  },
   { connection: workerConnection, concurrency: config.WORKER_CONCURRENCY },
 );
+
+const alertWorkerConnection = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
+const alertWorker = new Worker<AlertJobData, AlertResult>(
+  ALERTS_QUEUE,
+  (job) =>
+    deliverAlert(
+      {
+        prisma,
+        dashboardUrl: config.DASHBOARD_URL,
+        policy: { allowAnyHost: config.WEBHOOK_ALLOW_ANY_HOST },
+      },
+      job.data,
+    ),
+  { connection: alertWorkerConnection, concurrency: 5 },
+);
+alertWorker.on("completed", (job, result) =>
+  console.info(`alert ${job.data.kind} for issue ${job.data.issueId}: ${result}`),
+);
+alertWorker.on("failed", (job, err) =>
+  console.warn(`alert ${job?.id}: attempt ${job?.attemptsMade} failed: ${err.message}`),
+);
+alertWorker.on("error", (err) => console.error("alert worker error", err));
 
 worker.on("completed", (job, result) => {
   if (result.status !== "stored") console.info(`event ${job.id}: ${result.status}`);
@@ -60,9 +115,8 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     closing = true;
     // close() waits for in-flight jobs; anything interrupted harder than this is picked up again
     // by BullMQ's stalled-job check and deduplicated by eventId.
-    void worker
-      .close()
-      .then(() => deadLetter.close())
+    void Promise.all([worker.close(), alertWorker.close()])
+      .then(() => Promise.all([deadLetter.close(), alerts.close()]))
       .then(() => prisma.$disconnect())
       .finally(() => process.exit(0));
   });

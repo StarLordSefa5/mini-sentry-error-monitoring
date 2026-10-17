@@ -3,7 +3,14 @@ import type { IngestJobData } from "@mini-sentry/shared";
 import { culprit, fingerprint } from "./fingerprint.js";
 
 export type ProcessResult =
-  | { status: "stored"; issueId: string; newIssue: boolean }
+  | {
+      status: "stored";
+      issueId: string;
+      /** First event of this fingerprint: worth an alert. */
+      newIssue: boolean;
+      /** The issue was resolved and happened again; it is unresolved now. Worth an alert. */
+      regressed: boolean;
+    }
   /** This eventId was already stored: a retried job or a re-sent beacon. Nothing changed. */
   | { status: "duplicate" }
   /** The project was deleted after the event was accepted. Retrying cannot help. */
@@ -33,6 +40,14 @@ export async function processEvent(
 
   try {
     return await prisma.$transaction(async (tx) => {
+      // Lock the issue row (if any) so the status we read is the one we overwrite: two concurrent
+      // events for a resolved issue must produce one regression, not two.
+      const [previous] = await tx.$queryRaw<{ status: string }[]>`
+        SELECT "status" FROM "Issue"
+        WHERE "projectId" = ${projectId} AND "fingerprint" = ${hash}
+        FOR UPDATE
+      `;
+
       // One statement, so concurrent events for the same issue cannot lose an increment or move
       // lastSeen backwards (jobs can finish out of order).
       const [issue] = await tx.$queryRaw<{ id: string; inserted: boolean }[]>`
@@ -44,7 +59,10 @@ export async function processEvent(
         ON CONFLICT ("projectId", "fingerprint") DO UPDATE SET
           "count" = "Issue"."count" + 1,
           "firstSeen" = LEAST("Issue"."firstSeen", EXCLUDED."firstSeen"),
-          "lastSeen" = GREATEST("Issue"."lastSeen", EXCLUDED."lastSeen")
+          "lastSeen" = GREATEST("Issue"."lastSeen", EXCLUDED."lastSeen"),
+          -- A resolved issue that happens again is reopened. Ignored issues stay ignored.
+          "status" = CASE WHEN "Issue"."status" = 'resolved' THEN 'unresolved'::"IssueStatus"
+                          ELSE "Issue"."status" END
         RETURNING "id", (xmax = 0) AS "inserted"
       `;
       if (!issue) throw new Error("Issue upsert returned no row");
@@ -54,13 +72,19 @@ export async function processEvent(
           ...event,
           // StackFrame is plain JSON, but as an interface it has no index signature for Prisma.
           frames: event.frames as unknown as Prisma.InputJsonValue,
+          breadcrumbs: (event.breadcrumbs ?? undefined) as unknown as Prisma.InputJsonValue,
           timestamp: new Date(event.timestamp),
           receivedAt: new Date(seenAt),
           projectId,
           issueId: issue.id,
         },
       });
-      return { status: "stored", issueId: issue.id, newIssue: issue.inserted };
+      return {
+        status: "stored",
+        issueId: issue.id,
+        newIssue: issue.inserted,
+        regressed: previous?.status === "resolved",
+      };
     });
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
