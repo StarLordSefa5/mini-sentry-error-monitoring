@@ -1,9 +1,10 @@
 import type { PrismaClient } from "@mini-sentry/db";
 import { checkWebhookUrl, sendWebhook, type WebhookPolicy } from "@mini-sentry/notify";
+import type { SourceMapReleaseDto } from "@mini-sentry/shared";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import type { ProjectKeyCache } from "../lib/project-keys.js";
-import { generateApiKey } from "../lib/tokens.js";
+import { generateApiKey, randomToken, sha256 } from "../lib/tokens.js";
 import { requireUser } from "../plugins/session.js";
 import { issueRoutes } from "./issues.js";
 
@@ -41,6 +42,7 @@ const projectSelect = {
   name: true,
   apiKey: true,
   alertWebhookUrl: true,
+  uploadTokenHash: true,
   createdAt: true,
 } as const;
 
@@ -54,11 +56,15 @@ export const projectRoutes: FastifyPluginAsync<ProjectRoutesOptions> = async (
   await app.register(issueRoutes, { prefix: "/:projectId/issues", prisma });
 
   // DSN in Sentry's format: <protocol>://<publicKey>@<host>/<projectId>
-  const withDsn = <T extends { id: string; apiKey: string }>(project: T) => {
+  const withDsn = <T extends { id: string; apiKey: string; uploadTokenHash: string | null }>({
+    uploadTokenHash,
+    ...project
+  }: T) => {
     const url = new URL(publicUrl);
     url.username = project.apiKey;
     url.pathname = `/${project.id}`;
-    return { ...project, dsn: url.toString() };
+    // The hash never leaves the server; the dashboard only needs to know a token exists.
+    return { ...project, hasUploadToken: uploadTokenHash !== null, dsn: url.toString() };
   };
 
   app.get("/", async (request) => {
@@ -141,6 +147,58 @@ export const projectRoutes: FastifyPluginAsync<ProjectRoutesOptions> = async (
     } catch (err) {
       return reply.code(502).send({ error: "webhook_failed", message: (err as Error).message });
     }
+    return reply.code(204).send();
+  });
+
+  // Creates (or replaces) the secret token CI uses to upload source maps. It is returned once;
+  // only its hash is stored.
+  app.post("/:projectId/upload-token", async (request, reply) => {
+    const { projectId } = projectParams.parse(request.params);
+    const token = `mss_${randomToken(32)}`;
+    const { count } = await prisma.project.updateMany({
+      where: { id: projectId, ownerId: request.user!.id },
+      data: { uploadTokenHash: sha256(token) },
+    });
+    if (count === 0) return reply.code(404).send({ error: "not_found" });
+    return reply.code(201).send({ token });
+  });
+
+  app.get("/:projectId/sourcemaps", async (request, reply) => {
+    const { projectId } = projectParams.parse(request.params);
+    const project = await prisma.project.findFirst({
+      where: { id: projectId, ownerId: request.user!.id },
+      select: { id: true },
+    });
+    if (!project) return reply.code(404).send({ error: "not_found" });
+
+    const groups = await prisma.sourceMap.groupBy({
+      by: ["release"],
+      where: { projectId },
+      _count: { _all: true },
+      _sum: { size: true },
+      _max: { updatedAt: true },
+      orderBy: { _max: { updatedAt: "desc" } },
+      take: 20,
+    });
+    const releases: SourceMapReleaseDto[] = groups.map((g) => ({
+      release: g.release,
+      files: g._count._all,
+      bytes: g._sum.size ?? 0,
+      lastUploadAt: (g._max.updatedAt ?? new Date(0)).toISOString(),
+    }));
+    return { releases };
+  });
+
+  app.delete("/:projectId/sourcemaps/:release", async (request, reply) => {
+    const { projectId, release } = projectParams
+      .extend({ release: z.string().min(1).max(256) })
+      .parse(request.params);
+    const project = await prisma.project.findFirst({
+      where: { id: projectId, ownerId: request.user!.id },
+      select: { id: true },
+    });
+    if (!project) return reply.code(404).send({ error: "not_found" });
+    await prisma.sourceMap.deleteMany({ where: { projectId, release } });
     return reply.code(204).send();
   });
 

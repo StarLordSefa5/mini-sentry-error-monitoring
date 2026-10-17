@@ -9,6 +9,7 @@ import { sessionPlugin } from "./plugins/session.js";
 import { authRoutes } from "./routes/auth.js";
 import { ingestRoutes } from "./routes/ingest.js";
 import { projectRoutes } from "./routes/projects.js";
+import { sourcemapRoutes } from "./routes/sourcemaps.js";
 
 export interface AppDeps {
   config: Config;
@@ -54,6 +55,9 @@ export async function buildApp({
     queue: eventsQueue,
     rateLimiter,
   });
+
+  // Source map uploads from CI: secret upload token, no session.
+  await app.register(sourcemapRoutes, { prefix: "/api", prisma });
 
   // Dashboard API: cookie sessions.
   await app.register(async (dashboard) => {

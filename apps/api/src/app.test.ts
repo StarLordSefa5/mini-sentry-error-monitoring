@@ -428,4 +428,63 @@ describe.skipIf(!databaseUrl)("API", () => {
       expect(other.statusCode).toBe(404);
     });
   });
+
+  describe("source maps", () => {
+    const map = { version: 3, sources: ["src/cart.ts"], names: [], mappings: "AAAA" };
+    const upload = (projectId: string, auth: string | undefined, body: unknown = map) =>
+      app.inject({
+        method: "PUT",
+        url: `/api/${projectId}/releases/${encodeURIComponent("shop@1.0.0")}/sourcemaps?file=/assets/app.js`,
+        headers: auth ? { authorization: `Bearer ${auth}` } : {},
+        payload: body as object,
+      });
+
+    it("accepts uploads only with the project's secret upload token", async () => {
+      const cookie = await signUp();
+      const project = await createProject(cookie);
+      expect(project.hasUploadToken).toBe(false);
+      expect((await upload(project.id, undefined)).statusCode).toBe(401);
+
+      const created = await app.inject({
+        method: "POST",
+        url: `/api/projects/${project.id}/upload-token`,
+        headers: { cookie },
+      });
+      const { token } = created.json<{ token: string }>();
+      expect(token).toMatch(/^mss_/);
+
+      // The public key ships in browser code, so it must not be able to upload maps.
+      expect((await upload(project.id, project.apiKey)).statusCode).toBe(401);
+      expect((await upload(project.id, "mss_wrong")).statusCode).toBe(401);
+      expect((await upload(project.id, token)).statusCode).toBe(201);
+      // Re-uploading the same file replaces it.
+      expect((await upload(project.id, token)).statusCode).toBe(201);
+      expect((await upload(project.id, token, { version: 2 })).statusCode).toBe(400);
+
+      const other = await createProject(cookie);
+      expect((await upload(other.id, token)).statusCode).toBe(401);
+
+      const list = await app.inject({
+        url: `/api/projects/${project.id}/sourcemaps`,
+        headers: { cookie },
+      });
+      expect(list.json()).toMatchObject({ releases: [{ release: "shop@1.0.0", files: 1 }] });
+
+      const detail = await app.inject({ url: `/api/projects/${project.id}`, headers: { cookie } });
+      const dto = detail.json<{ project: Record<string, unknown> }>().project;
+      expect(dto.hasUploadToken).toBe(true);
+      expect(dto).not.toHaveProperty("uploadTokenHash");
+
+      await app.inject({
+        method: "DELETE",
+        url: `/api/projects/${project.id}/sourcemaps/${encodeURIComponent("shop@1.0.0")}`,
+        headers: { cookie },
+      });
+      const after = await app.inject({
+        url: `/api/projects/${project.id}/sourcemaps`,
+        headers: { cookie },
+      });
+      expect(after.json()).toEqual({ releases: [] });
+    });
+  });
 });
