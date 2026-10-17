@@ -36,6 +36,7 @@
     <button id="throw">Throw TypeError</button>
     <button id="reject">Unhandled rejection</button>
     <button id="capture">captureException()</button>
+    <button id="flow">Checkout flow (breadcrumbs)</button>
     <div id="log"></div>
 
     <script type="module">
@@ -57,6 +58,16 @@
       document.getElementById("reject").onclick = () => {
         log("Rejecting a promise…");
         Promise.reject(new Error("Payment service timed out"));
+      };
+      document.getElementById("flow").onclick = async () => {
+        console.log("Checkout started", { items: 3 });
+        history.pushState({}, "", "/checkout" + location.search);
+        // This static server has no API, so the request fails with 404, like a broken backend.
+        const res = await fetch("/api/cart?session=secret-token");
+        console.warn("Cart request failed with", res.status);
+        const cart = res.ok ? await res.json() : undefined;
+        log("Reading cart.total…");
+        return cart.total;
       };
       document.getElementById("capture").onclick = () => {
         try {

@@ -2,7 +2,7 @@
 
 Open-source error monitoring service. Add the SDK to your app; errors from real users are sent to the server, grouped into issues by stack-trace fingerprint, shown on a dashboard, and announced on Slack/Discord when something new breaks.
 
-> Status: week 5 of 8. Errors are captured, queued, grouped into issues and browsable in the dashboard.
+> Status: week 6 of 8. Adds Discord/Slack alerts, per-project rate limiting and breadcrumbs.
 
 ## Architecture
 
@@ -13,15 +13,16 @@ Read path:   Dashboard ──▶ Dashboard API ──▶ PostgreSQL
 
 ## Repository layout
 
-| Path              | Purpose                                |
-| ----------------- | -------------------------------------- |
-| `apps/api`        | Ingestion API and dashboard API        |
-| `apps/worker`     | Processes queued events, groups issues |
-| `apps/dashboard`  | React dashboard                        |
-| `packages/db`     | Prisma schema, migrations and client   |
-| `packages/sdk`    | SDK published to npm                   |
-| `packages/shared` | Shared wire and API types              |
-| `scripts`         | Demo data seeding                      |
+| Path              | Purpose                                       |
+| ----------------- | --------------------------------------------- |
+| `apps/api`        | Ingestion API and dashboard API               |
+| `apps/worker`     | Processes queued events, groups issues        |
+| `apps/dashboard`  | React dashboard                               |
+| `packages/db`     | Prisma schema, migrations and client          |
+| `packages/notify` | Discord/Slack webhook formatting and delivery |
+| `packages/sdk`    | SDK published to npm                          |
+| `packages/shared` | Shared wire and API types                     |
+| `scripts`         | Demo data seeding                             |
 
 ## Getting started
 
@@ -72,7 +73,7 @@ import { init } from "@mini-sentry/sdk/node";
 init({ dsn: "http://<key>@localhost:4000/<projectId>" });
 ```
 
-The browser SDK reports `window` errors and unhandled promise rejections. The Node SDK reports uncaught exceptions and unhandled rejections, then exits with code 1 like Node does on its own (`exitOnError: false` to opt out).
+The browser SDK reports `window` errors and unhandled promise rejections, with the last 20 breadcrumbs: clicks, `fetch` requests (method, path, status, duration; query strings are dropped), route changes and console output. Add your own with `addBreadcrumb({ type: "custom", message })`. The Node SDK reports uncaught exceptions and unhandled rejections, then exits with code 1 like Node does on its own (`exitOnError: false` to opt out).
 
 Try it locally:
 
@@ -97,6 +98,8 @@ node examples/node/crash.mjs "<DSN>" rejection
 | POST   | `/api/projects/:projectId/api-key/rotate`                                  | session |
 | GET    | `/api/projects/:projectId/issues` (`status`, `q`, `sort`, `page`, `limit`) | session |
 | GET    | `/api/projects/:projectId/issues/:issueId`                                 | session |
+| PATCH  | `/api/projects/:projectId` (`name`, `alertWebhookUrl`)                     | session |
+| POST   | `/api/projects/:projectId/alerts/test`                                     | session |
 | PATCH  | `/api/projects/:projectId/issues/:issueId` (`status`)                      | session |
 | GET    | `/api/projects/:projectId/issues/:issueId/events`                          | session |
 | GET    | `/api/projects/:projectId/issues/:issueId/stats` (`range`: `24h` or `7d`)  | session |
@@ -111,6 +114,19 @@ React + Vite + TypeScript, TanStack Query for data fetching and caching, React R
 - **Settings**: DSN and API key with copy buttons, SDK install snippets for browser and Node.js, a "send a test error" button, key rotation.
 
 In development Vite proxies `/api` to the API, so the session cookie is same-origin.
+
+## Alerts
+
+Set a Discord or Slack incoming webhook in a project's settings. The worker posts a message when:
+
+- a **new issue** appears (first event with a new fingerprint), or
+- a **resolved issue happens again** (regression). The issue goes back to unresolved. Ignored issues stay ignored and silent.
+
+Alerts run on their own BullMQ queue with retries, so a slow or failing webhook never delays grouping. A webhook that answers 404 (deleted) is not retried.
+
+## Rate limiting
+
+Each project may send `RATE_LIMIT_PER_MINUTE` events per minute (default 1000). Beyond that the API answers `429` with `Retry-After`, and the SDK stops sending until then. An app stuck in an error loop cannot flood the queue or the database.
 
 ## How grouping works
 
@@ -146,3 +162,8 @@ Line and column numbers are left out on purpose: editing an unrelated part of a 
 - **Issue location (`culprit`) is stored once**, from the top in-app frame of the first event, so the issue list does not need to read events.
 - **Event counts per hour/day are computed in SQL** with `generate_series`, so empty buckets come back as zeros and the chart's time axis has no gaps.
 - **The issue detail page is lazy-loaded.** The chart library is the largest dependency, so it is only downloaded when someone opens an issue.
+- **Webhook URLs are restricted to Discord and Slack (https).** A free-form URL would let any user make the worker send requests into our own network (SSRF), e.g. to Redis or a cloud metadata endpoint. Redirects are not followed for the same reason. `WEBHOOK_ALLOW_ANY_HOST=true` relaxes this for local testing only.
+- **Regressions are detected under a row lock.** The worker reads the issue's status with `SELECT … FOR UPDATE` in the same transaction as the upsert, so two simultaneous events for a resolved issue produce exactly one regression alert.
+- **Rate limits are a Redis fixed window** (`INCR` + `EXPIRE` per project per minute), shared by every API instance. `INCR` is atomic, so concurrent requests cannot both slip under the limit. Invalid keys are rejected before counting, so they cannot use up a project's budget.
+- **Breadcrumbs drop query strings and never record input values**, since both often carry tokens or personal data.
+- **Known gap:** an alert is queued after the event's transaction commits. If that enqueue fails, the retried job sees the event as already stored and the alert is lost. A transactional outbox table would close this.
