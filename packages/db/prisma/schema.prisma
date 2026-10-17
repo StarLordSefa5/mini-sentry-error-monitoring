@@ -32,17 +32,20 @@ model Session {
 }
 
 model Project {
-  id              String   @id @default(cuid())
+  id              String      @id @default(cuid())
   name            String
   /// Public key used by the SDK. It ships in browser code, so it only grants event writes.
-  apiKey          String   @unique
+  apiKey          String      @unique
   ownerId         String
-  owner           User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  owner           User        @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   /// Discord or Slack incoming webhook notified on new issues and regressions.
   alertWebhookUrl String?
-  createdAt       DateTime @default(now())
+  /// SHA-256 of the secret token CI uses to upload source maps. Unlike apiKey it is never public.
+  uploadTokenHash String?
+  createdAt       DateTime    @default(now())
   issues          Issue[]
   events          Event[]
+  sourceMaps      SourceMap[]
 
   @@index([ownerId])
 }
@@ -101,4 +104,21 @@ model Event {
 
   @@index([projectId, receivedAt])
   @@index([issueId, receivedAt])
+}
+
+/// Source map for one minified file of one release, used to turn minified stack frames back into
+/// original file, line and function names.
+model SourceMap {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  release   String
+  /// URL path of the minified file this map belongs to, e.g. "/assets/index-BxK3a9Qz.js".
+  filePath  String
+  content   String
+  size      Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([projectId, release, filePath])
 }

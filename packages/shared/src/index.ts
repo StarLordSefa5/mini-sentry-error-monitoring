@@ -7,6 +7,10 @@ export interface StackFrame {
   function?: string;
   lineno?: number;
   colno?: number;
+  /** Original source lines around the error, filled in by the worker from a source map. */
+  context?: { pre: string[]; line: string; post: string[] };
+  /** Where this frame was in the minified file, kept when a source map rewrote it. */
+  minified?: { filename: string; lineno?: number; colno?: number };
 }
 
 export type BreadcrumbType = "click" | "navigation" | "fetch" | "console" | "custom";
@@ -89,7 +93,16 @@ export interface ProjectDto {
   apiKey: string;
   dsn: string;
   alertWebhookUrl: string | null;
+  /** Whether a source map upload token exists. The token itself is only shown once. */
+  hasUploadToken: boolean;
   createdAt: string;
+}
+
+export interface SourceMapReleaseDto {
+  release: string;
+  files: number;
+  bytes: number;
+  lastUploadAt: string;
 }
 
 /** A group of events that share the same fingerprint. */
