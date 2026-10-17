@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mini Sentry browser example</title>
+    <style>
+      body {
+        font:
+          16px/1.5 system-ui,
+          sans-serif;
+        max-width: 40rem;
+        margin: 2rem auto;
+        padding: 0 1rem;
+      }
+      button {
+        font: inherit;
+        margin: 0.25rem 0.5rem 0.25rem 0;
+        padding: 0.4rem 0.8rem;
+      }
+      code {
+        background: #eee;
+        padding: 0 0.25rem;
+      }
+      #log {
+        white-space: pre-wrap;
+        background: #f6f6f6;
+        padding: 0.75rem;
+        min-height: 3rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Mini Sentry browser example</h1>
+    <p id="status">Open this page with <code>?dsn=&lt;your project DSN&gt;</code>.</p>
+    <button id="throw">Throw TypeError</button>
+    <button id="reject">Unhandled rejection</button>
+    <button id="capture">captureException()</button>
+    <div id="log"></div>
+
+    <script type="module">
+      import * as MiniSentry from "/sdk/index.js";
+
+      const dsn = new URLSearchParams(location.search).get("dsn");
+      const log = (line) => (document.getElementById("log").textContent += line + "\n");
+
+      if (dsn) {
+        MiniSentry.init({ dsn, release: "example@1.0.0", environment: "development" });
+        document.getElementById("status").textContent = "SDK initialised.";
+      }
+
+      document.getElementById("throw").onclick = () => {
+        log("Throwing TypeError…");
+        const user = undefined;
+        return user.name;
+      };
+      document.getElementById("reject").onclick = () => {
+        log("Rejecting a promise…");
+        Promise.reject(new Error("Payment service timed out"));
+      };
+      document.getElementById("capture").onclick = () => {
+        try {
+          JSON.parse("{not json");
+        } catch (err) {
+          log("Captured: " + MiniSentry.captureException(err));
+        }
+      };
+    </script>
+  </body>
+</html>

@@ -2,7 +2,7 @@
 
 Open-source error monitoring service. Add the SDK to your app; errors from real users are sent to the server, grouped into issues by stack-trace fingerprint, shown on a dashboard, and announced on Slack/Discord when something new breaks.
 
-> Status: week 1 of 8. Accounts, sessions and projects with API keys.
+> Status: week 2 of 8. SDK captures errors in the browser and Node.js; events are stored directly (queue arrives in week 3).
 
 ## Architecture
 
@@ -48,10 +48,35 @@ pnpm dev          # API on http://localhost:4000
 | `pnpm infra:up`   | Start PostgreSQL and Redis |
 | `pnpm infra:down` | Stop them                  |
 
+## Using the SDK
+
+Create a project to get its DSN, then:
+
+```ts
+// Browser
+import { init, captureException } from "@mini-sentry/sdk";
+init({ dsn: "http://<key>@localhost:4000/<projectId>", release: "my-app@1.0.0" });
+
+// Node.js
+import { init } from "@mini-sentry/sdk/node";
+init({ dsn: "http://<key>@localhost:4000/<projectId>" });
+```
+
+The browser SDK reports `window` errors and unhandled promise rejections. The Node SDK reports uncaught exceptions and unhandled rejections, then exits with code 1 like Node does on its own (`exitOnError: false` to opt out).
+
+Try it locally:
+
+```bash
+pnpm example:browser                        # open http://localhost:5500/?dsn=<DSN>
+node examples/node/crash.mjs "<DSN>"        # uncaught exception
+node examples/node/crash.mjs "<DSN>" rejection
+```
+
 ## API
 
 | Method | Path                                      | Auth    |
 | ------ | ----------------------------------------- | ------- |
+| POST   | `/api/:projectId/events`                  | API key |
 | POST   | `/api/auth/register`                      | —       |
 | POST   | `/api/auth/login`                         | —       |
 | POST   | `/api/auth/logout`                        | —       |
@@ -70,3 +95,9 @@ pnpm dev          # API on http://localhost:4000
 - **No account enumeration.** Unknown email and wrong password return the same 401, and the unknown-email path still runs a hash comparison so timing matches.
 - **404 for other users' projects**, not 403, so project ids are not confirmed to exist.
 - **Shared `db` package.** The API and the worker use the same Prisma client and schema.
+- **Ingestion is a separate Fastify scope.** Session cookies are only parsed for dashboard routes, so event writes never pay for a session lookup.
+- **Events are sent as `text/plain` JSON with the key in the query string.** That makes the request a CORS "simple request": no preflight round trip per error, and `navigator.sendBeacon` (which cannot set headers) works. The key is public anyway.
+- **Unacknowledged events are re-sent with `sendBeacon` when the page is hidden.** `fetch` can be cut off when a tab closes. A re-sent event may arrive twice; the unique `eventId` makes the second write a no-op.
+- **Stack traces are parsed in the SDK** (V8 and Firefox/Safari formats) into frames, and the raw stack is kept too, so the server can re-parse later.
+- **The SDK never throws.** Transport failures are swallowed and the same error object is reported once, so error reporting cannot create new errors or loops.
+- **The published SDK has no private dependencies.** `tsup` inlines the shared wire types into its `.d.ts` files and ships ESM + CJS.
