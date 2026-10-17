@@ -29,18 +29,6 @@ export interface ErrorEvent {
   environment?: string;
 }
 
-/** A group of events that share the same fingerprint. */
-export interface Issue {
-  id: string;
-  projectId: string;
-  fingerprint: string;
-  title: string;
-  status: IssueStatus;
-  count: number;
-  firstSeen: string;
-  lastSeen: string;
-}
-
 /** BullMQ queue the API writes accepted events to. */
 export const EVENTS_QUEUE = "events";
 /** Events whose processing failed on every attempt, kept for inspection and replay. */
@@ -56,4 +44,71 @@ export interface IngestJobData {
 export interface DeadLetterJobData extends IngestJobData {
   failedReason: string;
   attemptsMade: number;
+}
+
+// Dashboard API response shapes. Dates are ISO 8601 strings.
+
+export interface UserDto {
+  id: string;
+  email: string;
+  name: string | null;
+}
+
+export interface ProjectDto {
+  id: string;
+  name: string;
+  /** Public key the SDK sends with every event. */
+  apiKey: string;
+  dsn: string;
+  createdAt: string;
+}
+
+/** A group of events that share the same fingerprint. */
+export interface IssueDto {
+  id: string;
+  type: string;
+  message: string;
+  culprit: string | null;
+  status: IssueStatus;
+  count: number;
+  firstSeen: string;
+  lastSeen: string;
+}
+
+export interface IssueListResponse {
+  issues: IssueDto[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+export interface EventDto {
+  id: string;
+  eventId: string;
+  platform: Platform;
+  type: string;
+  message: string;
+  stack: string | null;
+  frames: StackFrame[];
+  url: string | null;
+  userAgent: string | null;
+  release: string | null;
+  environment: string | null;
+  /** Client time. */
+  timestamp: string;
+  /** Server time; issue first/last seen are based on this. */
+  receivedAt: string;
+}
+
+export interface IssueDetailResponse {
+  issue: IssueDto;
+  latestEvent: EventDto | null;
+}
+
+export type StatsRange = "24h" | "7d";
+
+export interface IssueStatsResponse {
+  range: StatsRange;
+  /** One bucket per hour (24h) or day (7d), oldest first, including empty ones. */
+  buckets: { start: string; count: number }[];
 }

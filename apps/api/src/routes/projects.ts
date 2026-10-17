@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { ProjectKeyCache } from "../lib/project-keys.js";
 import { generateApiKey } from "../lib/tokens.js";
 import { requireUser } from "../plugins/session.js";
+import { issueRoutes } from "./issues.js";
 
 const createProjectBody = z.object({
   name: z.string().trim().min(1).max(100),
@@ -27,6 +28,8 @@ export const projectRoutes: FastifyPluginAsync<ProjectRoutesOptions> = async (
 ) => {
   // Project management is session-only. The public API key can write events, nothing else.
   app.addHook("preHandler", requireUser);
+
+  await app.register(issueRoutes, { prefix: "/:projectId/issues", prisma });
 
   // DSN in Sentry's format: <protocol>://<publicKey>@<host>/<projectId>
   const withDsn = <T extends { id: string; apiKey: string }>(project: T) => {
