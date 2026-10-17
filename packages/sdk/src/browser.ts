@@ -1,6 +1,14 @@
-import { Client, type ClientOptions, type ErrorEvent, type Transport } from "./client.js";
+import { instrumentBrowser } from "./breadcrumbs.js";
+import {
+  Client,
+  type BreadcrumbInput,
+  type ClientOptions,
+  type ErrorEvent,
+  type Transport,
+} from "./client.js";
+import { parseDsn } from "./dsn.js";
 
-export type { ClientOptions, ErrorEvent };
+export type { BreadcrumbInput, ClientOptions, ErrorEvent };
 
 // Events whose fetch has not been acknowledged yet. On page close they are re-sent with
 // sendBeacon; the server dedupes by eventId, so an event that did arrive is not stored twice.
@@ -27,6 +35,9 @@ const fetchTransport: Transport = async (event, dsn) => {
   });
   // Any response means the server saw it. Only network failures are worth a retry on page close.
   unacknowledged.delete(event.eventId);
+  if (response.status === 429) {
+    return { retryAfterSeconds: Number(response.headers.get("retry-after") ?? NaN) };
+  }
   if (!response.ok && typeof console !== "undefined") {
     console.warn(`[mini-sentry] Event rejected with HTTP ${response.status}`);
   }
@@ -53,6 +64,9 @@ export function init(options: ClientOptions): void {
   }));
   client = instance;
 
+  const ownEndpoint = parseDsn(options.dsn).endpoint.split("?")[0]!;
+  instrumentBrowser(instance, (url) => url.startsWith(ownEndpoint));
+
   window.addEventListener("error", (event) => {
     // Without an Error object (e.g. a cross-origin "Script error."), fall back to the location
     // the browser gives us.
@@ -76,6 +90,11 @@ export function init(options: ClientOptions): void {
 /** Reports an error you caught yourself. Returns the event id. */
 export function captureException(error: unknown): string | undefined {
   return client?.captureException(error);
+}
+
+/** Records something worth knowing if an error follows, e.g. "checkout started". */
+export function addBreadcrumb(crumb: BreadcrumbInput): void {
+  client?.addBreadcrumb(crumb);
 }
 
 /** Waits until queued events are sent, or the timeout passes. */

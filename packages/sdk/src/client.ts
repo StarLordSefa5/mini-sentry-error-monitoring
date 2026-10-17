@@ -1,8 +1,8 @@
-import type { ErrorEvent, Platform, StackFrame } from "@mini-sentry/shared";
+import type { Breadcrumb, ErrorEvent, Platform, StackFrame } from "@mini-sentry/shared";
 import { parseDsn, type ParsedDsn } from "./dsn.js";
 import { parseStack } from "./stack.js";
 
-export type { ErrorEvent, StackFrame };
+export type { Breadcrumb, ErrorEvent, StackFrame };
 
 export interface ClientOptions {
   dsn: string;
@@ -12,19 +12,34 @@ export interface ClientOptions {
   enabled?: boolean;
   /** Edit or drop (return null) an event before it is sent. */
   beforeSend?: (event: ErrorEvent) => ErrorEvent | null;
+  /** How many breadcrumbs to keep and send with each event. Default 20, 0 turns them off. */
+  maxBreadcrumbs?: number;
 }
 
-export type Transport = (event: ErrorEvent, dsn: ParsedDsn) => Promise<void>;
+export interface TransportResult {
+  /** Set when the server rate-limited us (HTTP 429): send nothing until this many seconds pass. */
+  retryAfterSeconds?: number;
+}
+
+export type Transport = (event: ErrorEvent, dsn: ParsedDsn) => Promise<TransportResult | void>;
+
+export type BreadcrumbInput = Omit<Breadcrumb, "timestamp"> & { timestamp?: string };
 
 // Matches the ingestion API's limits, so oversized events are trimmed instead of rejected.
 const MAX_MESSAGE = 8192;
 const MAX_STACK = 65536;
+const MAX_BREADCRUMB_MESSAGE = 1024;
+// Used when a 429 comes without a usable Retry-After.
+const DEFAULT_BACKOFF_SECONDS = 60;
 
 export class Client {
   private readonly dsn: ParsedDsn;
   private readonly inFlight = new Set<Promise<void>>();
   // Errors already reported, so a captured-then-rethrown error is not sent twice.
   private readonly seen = new WeakSet<object>();
+  private readonly breadcrumbs: Breadcrumb[] = [];
+  // While rate-limited, events are dropped on the client: sending them would only get 429s.
+  private pausedUntil = 0;
 
   constructor(
     private readonly options: ClientOptions,
@@ -38,6 +53,7 @@ export class Client {
   /** Reports an error. Returns the event id, or undefined if nothing was sent. */
   captureException(error: unknown, extraFrames?: StackFrame[]): string | undefined {
     if (this.options.enabled === false) return undefined;
+    if (Date.now() < this.pausedUntil) return undefined;
     if (typeof error === "object" && error !== null) {
       if (this.seen.has(error)) return undefined;
       this.seen.add(error);
@@ -54,10 +70,32 @@ export class Client {
     if (!event) return undefined;
 
     // Transport errors are swallowed: reporting an error must never cause another one.
-    const sending = this.transport(event, this.dsn).catch(() => undefined);
+    const sending = this.transport(event, this.dsn)
+      .then((result) => {
+        if (result?.retryAfterSeconds !== undefined) {
+          const seconds = Number.isFinite(result.retryAfterSeconds)
+            ? result.retryAfterSeconds
+            : DEFAULT_BACKOFF_SECONDS;
+          this.pausedUntil = Date.now() + seconds * 1000;
+        }
+      })
+      .catch(() => undefined);
     this.inFlight.add(sending);
     void sending.finally(() => this.inFlight.delete(sending));
     return event.eventId;
+  }
+
+  /** Records something that happened, to be sent along with the next error. */
+  addBreadcrumb(crumb: BreadcrumbInput): void {
+    const max = this.options.maxBreadcrumbs ?? 20;
+    if (max <= 0 || this.options.enabled === false) return;
+    this.breadcrumbs.push({
+      ...crumb,
+      message: truncate(crumb.message, MAX_BREADCRUMB_MESSAGE),
+      timestamp: crumb.timestamp ?? new Date().toISOString(),
+    });
+    // Ring buffer: keep only the most recent ones.
+    if (this.breadcrumbs.length > max) this.breadcrumbs.splice(0, this.breadcrumbs.length - max);
   }
 
   /** Waits for queued events to be sent. Resolves false if the timeout was hit first. */
@@ -88,6 +126,7 @@ export class Client {
       frames: frames.length ? frames : (extraFrames ?? []),
       ...(this.options.release ? { release: this.options.release } : {}),
       ...(this.options.environment ? { environment: this.options.environment } : {}),
+      ...(this.breadcrumbs.length ? { breadcrumbs: [...this.breadcrumbs] } : {}),
     };
   }
 }

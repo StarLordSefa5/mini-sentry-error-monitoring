@@ -1,6 +1,13 @@
-import { Client, type ClientOptions, type ErrorEvent, type Transport } from "./client.js";
+import { instrumentConsole } from "./breadcrumbs.js";
+import {
+  Client,
+  type BreadcrumbInput,
+  type ClientOptions,
+  type ErrorEvent,
+  type Transport,
+} from "./client.js";
 
-export type { ErrorEvent };
+export type { BreadcrumbInput, ErrorEvent };
 
 export interface NodeOptions extends ClientOptions {
   /**
@@ -18,6 +25,9 @@ const fetchTransport: Transport = async (event, dsn) => {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(event),
   });
+  if (response.status === 429) {
+    return { retryAfterSeconds: Number(response.headers.get("retry-after") ?? NaN) };
+  }
   if (!response.ok) {
     console.warn(`[mini-sentry] Event rejected with HTTP ${response.status}`);
   }
@@ -38,6 +48,7 @@ export function init(options: NodeOptions): void {
     () => ({ userAgent: `Node.js ${process.version} (${process.platform})` }),
   );
   client = instance;
+  instrumentConsole(instance);
 
   const exitOnError = options.exitOnError ?? true;
   const timeout = options.shutdownTimeoutMs ?? 2000;
@@ -61,6 +72,11 @@ export function init(options: NodeOptions): void {
 /** Reports an error you caught yourself. Returns the event id. */
 export function captureException(error: unknown): string | undefined {
   return client?.captureException(error);
+}
+
+/** Records something worth knowing if an error follows, e.g. "job 42 started". */
+export function addBreadcrumb(crumb: BreadcrumbInput): void {
+  client?.addBreadcrumb(crumb);
 }
 
 /** Waits until queued events are sent, or the timeout passes. Call before a manual exit. */
