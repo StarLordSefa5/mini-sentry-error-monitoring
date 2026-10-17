@@ -6,6 +6,7 @@ import type {
   IssueStatsResponse,
   IssueStatus,
   ProjectDto,
+  SourceMapReleaseDto,
   StatsRange,
   UserDto,
 } from "@mini-sentry/shared";
@@ -214,5 +215,41 @@ export function useUpdateProject(projectId: string) {
 export function useTestAlert(projectId: string) {
   return useMutation({
     mutationFn: () => api<void>(`/projects/${projectId}/alerts/test`, { method: "POST" }),
+  });
+}
+
+export function useSourceMaps(projectId: string) {
+  return useQuery({
+    queryKey: [...keys.project(projectId), "sourcemaps"],
+    queryFn: async () =>
+      (await api<{ releases: SourceMapReleaseDto[] }>(`/projects/${projectId}/sourcemaps`))
+        .releases,
+  });
+}
+
+export function useDeleteSourceMaps(projectId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (release: string) =>
+      api<void>(`/projects/${projectId}/sourcemaps/${encodeURIComponent(release)}`, {
+        method: "DELETE",
+      }),
+    onSuccess: () =>
+      client.invalidateQueries({ queryKey: [...keys.project(projectId), "sourcemaps"] }),
+  });
+}
+
+/** Creates or replaces the upload token. The token is only ever returned here. */
+export function useCreateUploadToken(projectId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async () =>
+      (await api<{ token: string }>(`/projects/${projectId}/upload-token`, { method: "POST" }))
+        .token,
+    onSuccess: () => {
+      client.setQueryData<ProjectDto>(keys.project(projectId), (old) =>
+        old ? { ...old, hasUploadToken: true } : old,
+      );
+    },
   });
 }

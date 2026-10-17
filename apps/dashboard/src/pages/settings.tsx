@@ -1,6 +1,14 @@
 import { useState, type FormEvent } from "react";
 import type { ProjectDto } from "@mini-sentry/shared";
-import { BellIcon, CheckIcon, CopyIcon, RefreshCwIcon, SendIcon } from "lucide-react";
+import {
+  BellIcon,
+  CheckIcon,
+  CopyIcon,
+  KeyRoundIcon,
+  RefreshCwIcon,
+  SendIcon,
+  Trash2Icon,
+} from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import { ErrorState } from "@/components/states";
@@ -21,7 +29,16 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ApiError } from "@/lib/api";
-import { useProject, useRotateKey, useTestAlert, useUpdateProject } from "@/lib/queries";
+import { formatDateTime, timeAgo } from "@/lib/format";
+import {
+  useCreateUploadToken,
+  useDeleteSourceMaps,
+  useProject,
+  useRotateKey,
+  useSourceMaps,
+  useTestAlert,
+  useUpdateProject,
+} from "@/lib/queries";
 
 const SDK_PACKAGE = "@mini-sentry/sdk";
 
@@ -40,6 +57,7 @@ export function SettingsPage() {
       </div>
       <SetupCard project={project} />
       <AlertsCard project={project} />
+      <SourceMapsCard project={project} />
       <KeysCard project={project} />
     </div>
   );
@@ -227,6 +245,103 @@ function AlertsCard({ project }: { project: ProjectDto }) {
             </Button>
           </div>
         </form>
+      </CardContent>
+    </Card>
+  );
+}
+
+function SourceMapsCard({ project }: { project: ProjectDto }) {
+  const [token, setToken] = useState<string | null>(null);
+  const create = useCreateUploadToken(project.id);
+  const { data: releases } = useSourceMaps(project.id);
+  const remove = useDeleteSourceMaps(project.id);
+
+  const command = `MINI_SENTRY_UPLOAD_TOKEN=${token ?? "<your token>"} \\
+  npx @mini-sentry/cli sourcemaps upload dist \\
+  --release my-app@1.0.0 --dsn "${project.dsn}" --delete-after`;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Source maps</CardTitle>
+        <CardDescription>
+          Upload your build's source maps from CI, and errors from minified code show the original
+          file, line and code. Use the same release name in <code>init()</code> and in the upload.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        <Step n={1} title="Create an upload token">
+          {token ? (
+            <div className="space-y-2">
+              <Field label="Upload token" value={token} />
+              <p role="status" className="text-sm text-muted-foreground">
+                Copy it now and store it as a CI secret. It will not be shown again.
+              </p>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                variant="outline"
+                disabled={create.isPending}
+                onClick={() =>
+                  create.mutate(undefined, {
+                    onSuccess: setToken,
+                    onError: () => toast.error("Could not create a token."),
+                  })
+                }
+              >
+                <KeyRoundIcon /> {project.hasUploadToken ? "Replace token" : "Create token"}
+              </Button>
+              <p className="text-sm text-muted-foreground">
+                {project.hasUploadToken
+                  ? "A token exists. Replacing it stops the old one from working."
+                  : "Secret, unlike the DSN: never put it in your app's code."}
+              </p>
+            </div>
+          )}
+        </Step>
+        <Step n={2} title="Upload after each build">
+          <Code>{command}</Code>
+          <p className="text-sm text-muted-foreground">
+            <code>--delete-after</code> removes the maps from <code>dist</code>, so your original
+            code is not published with the site.
+          </p>
+        </Step>
+        <Step n={3} title="Uploaded releases">
+          {!releases?.length ? (
+            <p className="text-sm text-muted-foreground">No source maps uploaded yet.</p>
+          ) : (
+            <ul className="divide-y rounded-lg border text-sm">
+              {releases.map((r) => (
+                <li key={r.release} className="flex items-center gap-3 px-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-mono text-xs">{r.release}</p>
+                    <p
+                      className="text-xs text-muted-foreground"
+                      title={formatDateTime(r.lastUploadAt)}
+                    >
+                      {r.files} file{r.files === 1 ? "" : "s"} · {(r.bytes / 1024).toFixed(0)} KB ·{" "}
+                      {timeAgo(r.lastUploadAt)}
+                    </p>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={`Delete source maps for ${r.release}`}
+                    disabled={remove.isPending}
+                    onClick={() =>
+                      remove.mutate(r.release, {
+                        onSuccess: () => toast.success(`Deleted source maps for ${r.release}`),
+                      })
+                    }
+                  >
+                    <Trash2Icon />
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Step>
       </CardContent>
     </Card>
   );
