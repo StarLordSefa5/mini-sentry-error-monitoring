@@ -14,6 +14,7 @@
   "dependencies": {
     "@fastify/cookie": "^11.1.3",
     "@mini-sentry/db": "workspace:*",
+    "@mini-sentry/notify": "workspace:*",
     "@mini-sentry/shared": "workspace:*",
     "bullmq": "^6.3.16",
     "fastify": "^5.12.7",

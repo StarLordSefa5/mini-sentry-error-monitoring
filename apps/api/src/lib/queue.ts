@@ -4,10 +4,15 @@ import { Redis } from "ioredis";
 
 export type EventsQueue = Pick<Queue<IngestJobData>, "add" | "close">;
 
-export function createEventsQueue(redisUrl: string): Queue<IngestJobData> {
-  // Fail fast when Redis is down instead of buffering commands, so the API can answer 503 and
-  // the SDK's caller is not held open.
-  const connection = new Redis(redisUrl, { enableOfflineQueue: false, maxRetriesPerRequest: 1 });
+/**
+ * Redis client for request handling. It fails fast when Redis is down instead of buffering
+ * commands, so the API can answer 503 and the SDK's caller is not held open.
+ */
+export function createRedis(redisUrl: string): Redis {
+  return new Redis(redisUrl, { enableOfflineQueue: false, maxRetriesPerRequest: 1 });
+}
+
+export function createEventsQueue(connection: Redis): Queue<IngestJobData> {
   return new Queue<IngestJobData>(EVENTS_QUEUE, {
     connection,
     defaultJobOptions: {

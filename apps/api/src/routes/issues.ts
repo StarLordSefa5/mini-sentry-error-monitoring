@@ -1,5 +1,6 @@
 import { Prisma, type PrismaClient } from "@mini-sentry/db";
 import type {
+  Breadcrumb,
   EventDto,
   IssueDetailResponse,
   IssueDto,
@@ -64,6 +65,7 @@ function toEventDto(event: EventRow): EventDto {
     userAgent: event.userAgent,
     release: event.release,
     environment: event.environment,
+    breadcrumbs: (event.breadcrumbs ?? []) as unknown as Breadcrumb[],
     timestamp: event.timestamp.toISOString(),
     receivedAt: event.receivedAt.toISOString(),
   };

@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { createPrismaClient, type PrismaClient } from "@mini-sentry/db";
 import type {
   IngestJobData,
@@ -12,6 +14,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import type { EventsQueue } from "./lib/queue.js";
+import type { RateLimiter } from "./lib/rate-limit.js";
 
 // Integration tests: they need the Postgres from docker-compose (`pnpm infra:up`). Redis is
 // replaced by an in-memory fake queue.
@@ -24,7 +27,24 @@ const databaseUrl = process.env.DATABASE_URL;
 
 describe.skipIf(!databaseUrl)("API", () => {
   let app: FastifyInstance;
+  // Same app with WEBHOOK_ALLOW_ANY_HOST, to deliver test alerts to a local server.
+  let looseApp: FastifyInstance;
   let prisma: PrismaClient;
+  // Counts per project; the limit is tiny so the test can hit it.
+  const RATE_LIMIT = 3;
+  const hits = new Map<string, number>();
+  const fakeLimiter: RateLimiter = {
+    hit: async (projectId) => {
+      const used = (hits.get(projectId) ?? 0) + 1;
+      hits.set(projectId, used);
+      return {
+        allowed: used <= RATE_LIMIT,
+        limit: RATE_LIMIT,
+        remaining: Math.max(0, RATE_LIMIT - used),
+        resetSeconds: 42,
+      };
+    },
+  };
   const queued: { data: IngestJobData; jobId?: string }[] = [];
   const emails: string[] = [];
 
@@ -38,13 +58,22 @@ describe.skipIf(!databaseUrl)("API", () => {
 
   beforeAll(async () => {
     prisma = createPrismaClient(databaseUrl!);
-    const config = loadConfig({ ...process.env, NODE_ENV: "test" });
-    app = await buildApp({ config, prisma, eventsQueue: fakeQueue });
+    const deps = { prisma, eventsQueue: fakeQueue, rateLimiter: fakeLimiter };
+    const env = { ...process.env, NODE_ENV: "test" };
+    app = await buildApp({
+      ...deps,
+      config: loadConfig({ ...env, WEBHOOK_ALLOW_ANY_HOST: "false" }),
+    });
+    looseApp = await buildApp({
+      ...deps,
+      config: loadConfig({ ...env, WEBHOOK_ALLOW_ANY_HOST: "true" }),
+    });
   });
 
   afterAll(async () => {
     await prisma.user.deleteMany({ where: { email: { in: emails } } });
     await app.close();
+    await looseApp.close();
     await prisma.$disconnect();
   });
 
@@ -288,6 +317,115 @@ describe.skipIf(!databaseUrl)("API", () => {
       for (const url of [base, `${base}/${hot.id}`, `${base}/${hot.id}/stats`]) {
         expect((await app.inject({ url, headers: { cookie: stranger } })).statusCode).toBe(404);
       }
+    });
+  });
+
+  describe("rate limiting and breadcrumbs", () => {
+    it("answers 429 with Retry-After once a project is over its limit", async () => {
+      const project = await createProject(await signUp());
+      const send = () =>
+        app.inject({
+          method: "POST",
+          url: `/api/${project.id}/events?key=${project.apiKey}`,
+          payload: event(),
+        });
+      for (let i = 0; i < RATE_LIMIT; i++) expect((await send()).statusCode).toBe(202);
+
+      const limited = await send();
+      expect(limited.statusCode).toBe(429);
+      expect(limited.headers["retry-after"]).toBe("42");
+      expect(limited.headers["access-control-expose-headers"]).toContain("retry-after");
+    });
+
+    it("accepts breadcrumbs and rejects malformed ones", async () => {
+      const project = await createProject(await signUp());
+      const send = (breadcrumbs: unknown) =>
+        app.inject({
+          method: "POST",
+          url: `/api/${project.id}/events?key=${project.apiKey}`,
+          payload: { ...event(), breadcrumbs },
+        });
+      const crumb = { type: "click", timestamp: new Date().toISOString(), message: "button#pay" };
+      expect(
+        (await send([crumb, { ...crumb, type: "fetch", data: { status: 500 } }])).statusCode,
+      ).toBe(202);
+      expect((await send([{ ...crumb, type: "keylogger" }])).statusCode).toBe(400);
+      expect((await send([{ ...crumb, data: { nested: { a: 1 } } }])).statusCode).toBe(400);
+    });
+  });
+
+  describe("alerts", () => {
+    let server: Server;
+    let hook: string;
+    const received: Record<string, unknown>[] = [];
+
+    beforeAll(async () => {
+      server = createServer((req, res) => {
+        let body = "";
+        req.on("data", (c) => (body += c));
+        req.on("end", () => {
+          received.push(JSON.parse(body));
+          res.writeHead(204).end();
+        });
+      });
+      await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+      hook = `http://127.0.0.1:${(server.address() as AddressInfo).port}/hook`;
+    });
+
+    afterAll(() => new Promise<void>((r) => server.close(() => r())));
+
+    it("only accepts Discord or Slack webhooks by default", async () => {
+      const cookie = await signUp();
+      const project = await createProject(cookie);
+      const patch = (alertWebhookUrl: string | null) =>
+        app.inject({
+          method: "PATCH",
+          url: `/api/projects/${project.id}`,
+          headers: { cookie },
+          payload: { alertWebhookUrl },
+        });
+
+      for (const url of ["http://localhost:6379", "http://169.254.169.254/", hook]) {
+        const res = await patch(url);
+        expect(res.statusCode).toBe(400);
+        expect(res.json()).toMatchObject({ error: "invalid_webhook" });
+      }
+      const ok = await patch("https://discord.com/api/webhooks/1/abc");
+      expect(ok.json<{ project: ProjectDto }>().project.alertWebhookUrl).toBe(
+        "https://discord.com/api/webhooks/1/abc",
+      );
+      expect((await patch("")).json<{ project: ProjectDto }>().project.alertWebhookUrl).toBeNull();
+    });
+
+    it("sends a test notification", async () => {
+      const cookie = await signUp();
+      const project = await createProject(cookie);
+      await looseApp.inject({
+        method: "PATCH",
+        url: `/api/projects/${project.id}`,
+        headers: { cookie },
+        payload: { alertWebhookUrl: hook },
+      });
+
+      const res = await looseApp.inject({
+        method: "POST",
+        url: `/api/projects/${project.id}/alerts/test`,
+        headers: { cookie },
+      });
+      expect(res.statusCode).toBe(204);
+      expect(received.at(-1)).toMatchObject({
+        event: "test",
+        projectName: "Test project",
+        url: expect.stringMatching(new RegExp(`/projects/${project.id}/issues$`)),
+      });
+
+      const stranger = await signUp();
+      const other = await looseApp.inject({
+        method: "POST",
+        url: `/api/projects/${project.id}/alerts/test`,
+        headers: { cookie: stranger },
+      });
+      expect(other.statusCode).toBe(404);
     });
   });
 });
