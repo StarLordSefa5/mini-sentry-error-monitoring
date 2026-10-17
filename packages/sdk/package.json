@@ -1,13 +1,13 @@
 {
   "name": "@mini-sentry/sdk",
-  "version": "0.0.0",
-  "private": true,
-  "description": "Browser and Node SDK that captures errors and sends them to Mini Sentry.",
+  "version": "0.1.0",
+  "description": "Error monitoring SDK for the browser and Node.js: captures uncaught errors with stack traces and breadcrumbs and sends them to Mini Sentry.",
   "license": "MIT",
   "type": "module",
   "sideEffects": false,
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -43,5 +43,20 @@
     "@mini-sentry/shared": "workspace:*",
     "tsup": "^9.0.0",
     "vitest": "^5.0.5"
+  },
+  "author": "Sefa",
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "error-monitoring",
+    "error-tracking",
+    "crash-reporting",
+    "stack-trace",
+    "breadcrumbs",
+    "sentry"
+  ],
+  "engines": {
+    "node": ">=18"
   }
 }

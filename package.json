@@ -21,11 +21,16 @@
     "test": "pnpm -r --if-present test",
     "dev:worker": "pnpm --filter @mini-sentry/worker dev",
     "dev:dashboard": "pnpm --filter @mini-sentry/dashboard dev",
-    "seed:demo": "node scripts/seed-demo.mjs"
+    "seed:demo": "node scripts/seed-demo.mjs",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "pnpm --filter @mini-sentry/sdk --filter @mini-sentry/cli build && changeset publish"
   },
   "devDependencies": {
+    "@changesets/cli": "3",
     "@eslint/js": "^10.0.1",
     "@types/node": "^26.6.5",
+    "esbuild": "~0.28.2",
     "eslint": "^10.13.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-react-hooks": "^7.1.1",
