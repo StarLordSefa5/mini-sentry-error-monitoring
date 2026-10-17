@@ -44,6 +44,9 @@ importers:
       '@mini-sentry/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@mini-sentry/notify':
+        specifier: workspace:*
+        version: link:../../packages/notify
       '@mini-sentry/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -145,6 +148,9 @@ importers:
       '@mini-sentry/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@mini-sentry/notify':
+        specifier: workspace:*
+        version: link:../../packages/notify
       '@mini-sentry/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -177,6 +183,12 @@ importers:
       prisma:
         specifier: 7.10.1
         version: 7.10.1(@types/node@26.6.5)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@6.0.3)
+
+  packages/notify:
+    devDependencies:
+      vitest:
+        specifier: ^5.0.5
+        version: 5.0.5(@types/node@26.6.5)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15))
 
   packages/sdk:
     devDependencies:
