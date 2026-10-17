@@ -2,7 +2,7 @@
 
 Open-source error monitoring service. Add the SDK to your app; errors from real users are sent to the server, grouped into issues by stack-trace fingerprint, shown on a dashboard, and announced on Slack/Discord when something new breaks.
 
-> Status: week 3 of 8. Events go through a Redis queue to a worker that groups them into issues.
+> Status: week 5 of 8. Errors are captured, queued, grouped into issues and browsable in the dashboard.
 
 ## Architecture
 
@@ -13,14 +13,15 @@ Read path:   Dashboard ──▶ Dashboard API ──▶ PostgreSQL
 
 ## Repository layout
 
-| Path              | Purpose                                 |
-| ----------------- | --------------------------------------- |
-| `apps/api`        | Ingestion API and dashboard API         |
-| `apps/worker`     | Processes queued events, groups issues  |
-| `apps/dashboard`  | React dashboard                         |
-| `packages/db`     | Prisma schema, migrations and client    |
-| `packages/sdk`    | SDK published to npm                    |
-| `packages/shared` | Shared types (`ErrorEvent`, `Issue`, …) |
+| Path              | Purpose                                |
+| ----------------- | -------------------------------------- |
+| `apps/api`        | Ingestion API and dashboard API        |
+| `apps/worker`     | Processes queued events, groups issues |
+| `apps/dashboard`  | React dashboard                        |
+| `packages/db`     | Prisma schema, migrations and client   |
+| `packages/sdk`    | SDK published to npm                   |
+| `packages/shared` | Shared wire and API types              |
+| `scripts`         | Demo data seeding                      |
 
 ## Getting started
 
@@ -34,22 +35,28 @@ pnpm build
 pnpm db:migrate   # apply migrations
 pnpm dev          # API on http://localhost:4000
 pnpm dev:worker   # in a second terminal
+pnpm dev:dashboard # http://localhost:5173
+pnpm seed:demo    # optional: demo account with sample errors
 ```
+
+The seed script logs in as `demo@example.com` / `demo-password-123` (local development only).
 
 ## Scripts
 
-| Command           | What it does                     |
-| ----------------- | -------------------------------- |
-| `pnpm dev`        | Run the API in watch mode        |
-| `pnpm dev:worker` | Run the worker in watch mode     |
-| `pnpm test`       | Run all tests (needs `infra:up`) |
-| `pnpm db:migrate` | Create/apply migrations          |
-| `pnpm build`      | Build every workspace            |
-| `pnpm typecheck`  | Type-check every workspace       |
-| `pnpm lint`       | ESLint across the repo           |
-| `pnpm format`     | Prettier write                   |
-| `pnpm infra:up`   | Start PostgreSQL and Redis       |
-| `pnpm infra:down` | Stop them                        |
+| Command              | What it does                             |
+| -------------------- | ---------------------------------------- |
+| `pnpm dev`           | Run the API in watch mode                |
+| `pnpm dev:worker`    | Run the worker in watch mode             |
+| `pnpm dev:dashboard` | Run the dashboard (Vite)                 |
+| `pnpm seed:demo`     | Create a demo account with sample errors |
+| `pnpm test`          | Run all tests (needs `infra:up`)         |
+| `pnpm db:migrate`    | Create/apply migrations                  |
+| `pnpm build`         | Build every workspace                    |
+| `pnpm typecheck`     | Type-check every workspace               |
+| `pnpm lint`          | ESLint across the repo                   |
+| `pnpm format`        | Prettier write                           |
+| `pnpm infra:up`      | Start PostgreSQL and Redis               |
+| `pnpm infra:down`    | Stop them                                |
 
 ## Using the SDK
 
@@ -77,17 +84,33 @@ node examples/node/crash.mjs "<DSN>" rejection
 
 ## API
 
-| Method | Path                                      | Auth    |
-| ------ | ----------------------------------------- | ------- |
-| POST   | `/api/:projectId/events`                  | API key |
-| POST   | `/api/auth/register`                      | —       |
-| POST   | `/api/auth/login`                         | —       |
-| POST   | `/api/auth/logout`                        | —       |
-| GET    | `/api/auth/me`                            | session |
-| GET    | `/api/projects`                           | session |
-| POST   | `/api/projects`                           | session |
-| GET    | `/api/projects/:projectId`                | session |
-| POST   | `/api/projects/:projectId/api-key/rotate` | session |
+| Method | Path                                                                       | Auth    |
+| ------ | -------------------------------------------------------------------------- | ------- |
+| POST   | `/api/:projectId/events`                                                   | API key |
+| POST   | `/api/auth/register`                                                       | —       |
+| POST   | `/api/auth/login`                                                          | —       |
+| POST   | `/api/auth/logout`                                                         | —       |
+| GET    | `/api/auth/me`                                                             | session |
+| GET    | `/api/projects`                                                            | session |
+| POST   | `/api/projects`                                                            | session |
+| GET    | `/api/projects/:projectId`                                                 | session |
+| POST   | `/api/projects/:projectId/api-key/rotate`                                  | session |
+| GET    | `/api/projects/:projectId/issues` (`status`, `q`, `sort`, `page`, `limit`) | session |
+| GET    | `/api/projects/:projectId/issues/:issueId`                                 | session |
+| PATCH  | `/api/projects/:projectId/issues/:issueId` (`status`)                      | session |
+| GET    | `/api/projects/:projectId/issues/:issueId/events`                          | session |
+| GET    | `/api/projects/:projectId/issues/:issueId/stats` (`range`: `24h` or `7d`)  | session |
+
+## Dashboard
+
+React + Vite + TypeScript, TanStack Query for data fetching and caching, React Router, Tailwind CSS with shadcn/ui, Recharts.
+
+- **Projects**: create one per app; a new project opens on its setup page.
+- **Issues**: unresolved / resolved / ignored / all, search over type, message and location, sort by last seen, first seen or event count. Filters live in the URL, so a filtered view can be shared. The list refreshes every 30 s.
+- **Issue detail**: stack trace (library frames folded, raw stack one click away), events per hour (24h) or day (7d), latest event context, browser/OS breakdown, recent events, resolve / ignore / reopen.
+- **Settings**: DSN and API key with copy buttons, SDK install snippets for browser and Node.js, a "send a test error" button, key rotation.
+
+In development Vite proxies `/api` to the API, so the session cookie is same-origin.
 
 ## How grouping works
 
@@ -120,3 +143,6 @@ Line and column numbers are left out on purpose: editing an unrelated part of a 
 - **Exactly-once counting on an at-least-once queue.** BullMQ can run a job twice (a retry, or a worker killed mid-job whose lock expires). The issue upsert and the event insert run in one transaction, and `Event.eventId` is unique: a repeat hits the unique index, the transaction rolls back, and its count increment goes with it. Tested by killing the worker mid-run: 300 sent, 300 stored, `count = 300`.
 - **One SQL statement for the issue upsert.** `INSERT … ON CONFLICT DO UPDATE SET count = count + 1, lastSeen = GREATEST(…)` is atomic, so concurrent events cannot lose increments, and jobs finishing out of order cannot move `lastSeen` backwards.
 - **First/last seen use server receive time**, not the client's `timestamp`, so a device with a wrong clock cannot distort an issue's timeline. The client time is still stored on the event.
+- **Issue location (`culprit`) is stored once**, from the top in-app frame of the first event, so the issue list does not need to read events.
+- **Event counts per hour/day are computed in SQL** with `generate_series`, so empty buckets come back as zeros and the chart's time axis has no gaps.
+- **The issue detail page is lazy-loaded.** The chart library is the largest dependency, so it is only downloaded when someone opens an issue.
