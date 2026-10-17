@@ -2,6 +2,8 @@ import type { PrismaClient } from "@mini-sentry/db";
 import Fastify, { type FastifyInstance } from "fastify";
 import { ZodError } from "zod";
 import type { Config } from "./config.js";
+import { ProjectKeyCache } from "./lib/project-keys.js";
+import type { EventsQueue } from "./lib/queue.js";
 import { sessionPlugin } from "./plugins/session.js";
 import { authRoutes } from "./routes/auth.js";
 import { ingestRoutes } from "./routes/ingest.js";
@@ -10,9 +12,10 @@ import { projectRoutes } from "./routes/projects.js";
 export interface AppDeps {
   config: Config;
   prisma: PrismaClient;
+  eventsQueue: EventsQueue;
 }
 
-export async function buildApp({ config, prisma }: AppDeps): Promise<FastifyInstance> {
+export async function buildApp({ config, prisma, eventsQueue }: AppDeps): Promise<FastifyInstance> {
   const app = Fastify({
     logger: { level: config.NODE_ENV === "test" ? "silent" : "info" },
   });
@@ -37,7 +40,8 @@ export async function buildApp({ config, prisma }: AppDeps): Promise<FastifyInst
 
   // Ingestion: API-key auth only. Kept outside the session scope so event writes never pay for a
   // session lookup.
-  await app.register(ingestRoutes, { prefix: "/api", prisma });
+  const keys = new ProjectKeyCache(prisma);
+  await app.register(ingestRoutes, { prefix: "/api", keys, queue: eventsQueue });
 
   // Dashboard API: cookie sessions.
   await app.register(async (dashboard) => {
@@ -46,6 +50,7 @@ export async function buildApp({ config, prisma }: AppDeps): Promise<FastifyInst
     await dashboard.register(projectRoutes, {
       prefix: "/api/projects",
       prisma,
+      keys,
       publicUrl: config.PUBLIC_URL,
     });
   });

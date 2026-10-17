@@ -1,7 +1,8 @@
-import { Prisma, type PrismaClient } from "@mini-sentry/db";
 import type { ErrorEvent } from "@mini-sentry/shared";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import type { ProjectKeyCache } from "../lib/project-keys.js";
+import type { EventsQueue } from "../lib/queue.js";
 
 const frameSchema = z.object({
   filename: z.string().max(2048),
@@ -33,9 +34,14 @@ export const KEY_HEADER = "x-mini-sentry-key";
  * Public, CORS-open endpoint the SDK posts to. It is authenticated only by the project's API key,
  * which can be passed as a header or as `?key=` (navigator.sendBeacon cannot set headers).
  */
-export const ingestRoutes: FastifyPluginAsync<{ prisma: PrismaClient }> = async (
+interface IngestRoutesOptions {
+  keys: ProjectKeyCache;
+  queue: EventsQueue;
+}
+
+export const ingestRoutes: FastifyPluginAsync<IngestRoutesOptions> = async (
   app,
-  { prisma },
+  { keys, queue },
 ) => {
   // The SDK sends JSON as text/plain: that keeps the request "simple", so browsers skip the
   // CORS preflight and sendBeacon works.
@@ -69,27 +75,25 @@ export const ingestRoutes: FastifyPluginAsync<{ prisma: PrismaClient }> = async 
       ingestQuery.parse(request.query).key;
     if (!key) return reply.code(401).send({ error: "missing_api_key" });
 
-    const project = await prisma.project.findUnique({
-      where: { apiKey: key },
-      select: { id: true },
-    });
     // A valid key for a different project is rejected too.
-    if (!project || project.id !== projectId) {
+    if ((await keys.resolve(key)) !== projectId) {
       return reply.code(401).send({ error: "invalid_api_key" });
     }
 
     const event = eventSchema.parse(request.body);
     try {
-      await prisma.event.create({
-        data: { ...event, timestamp: new Date(event.timestamp), projectId },
-      });
+      // jobId = eventId: BullMQ ignores a second add while the first job is retained, and the
+      // worker's unique eventId check covers the rest.
+      await queue.add(
+        "event",
+        { projectId, event, receivedAt: new Date().toISOString() },
+        { jobId: event.eventId },
+      );
     } catch (err) {
-      // Same eventId already stored: the SDK retried. Accept without storing twice.
-      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
-        return { eventId: event.eventId, duplicate: true };
-      }
-      throw err;
+      request.log.error(err, "failed to enqueue event");
+      return reply.code(503).send({ error: "unavailable" });
     }
-    return { eventId: event.eventId };
+    // Accepted, not yet stored: grouping happens in the worker.
+    return reply.code(202).send({ eventId: event.eventId });
   });
 };

@@ -1,12 +1,15 @@
 import { createPrismaClient } from "@mini-sentry/db";
 import { buildApp } from "./app.js";
 import { loadConfig } from "./config.js";
+import { createEventsQueue } from "./lib/queue.js";
 
 const config = loadConfig();
 const prisma = createPrismaClient(config.DATABASE_URL);
-const app = await buildApp({ config, prisma });
+const eventsQueue = createEventsQueue(config.REDIS_URL);
+const app = await buildApp({ config, prisma, eventsQueue });
 
 app.addHook("onClose", async () => {
+  await eventsQueue.close();
   await prisma.$disconnect();
 });
 

@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@mini-sentry/db";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import type { ProjectKeyCache } from "../lib/project-keys.js";
 import { generateApiKey } from "../lib/tokens.js";
 import { requireUser } from "../plugins/session.js";
 
@@ -14,6 +15,7 @@ const projectParams = z.object({
 
 interface ProjectRoutesOptions {
   prisma: PrismaClient;
+  keys: ProjectKeyCache;
   publicUrl: string;
 }
 
@@ -21,7 +23,7 @@ const projectSelect = { id: true, name: true, apiKey: true, createdAt: true } as
 
 export const projectRoutes: FastifyPluginAsync<ProjectRoutesOptions> = async (
   app,
-  { prisma, publicUrl },
+  { prisma, keys, publicUrl },
 ) => {
   // Project management is session-only. The public API key can write events, nothing else.
   app.addHook("preHandler", requireUser);
@@ -65,16 +67,19 @@ export const projectRoutes: FastifyPluginAsync<ProjectRoutesOptions> = async (
 
   app.post("/:projectId/api-key/rotate", async (request, reply) => {
     const { projectId } = projectParams.parse(request.params);
-    const { count } = await prisma.project.updateMany({
+    const current = await prisma.project.findFirst({
       where: { id: projectId, ownerId: request.user!.id },
-      data: { apiKey: generateApiKey() },
+      select: { apiKey: true },
     });
-    if (count === 0) return reply.code(404).send({ error: "not_found" });
+    if (!current) return reply.code(404).send({ error: "not_found" });
 
-    const project = await prisma.project.findUniqueOrThrow({
+    const project = await prisma.project.update({
       where: { id: projectId },
+      data: { apiKey: generateApiKey() },
       select: projectSelect,
     });
+    // Other API instances keep accepting the old key until their cache entry expires.
+    keys.invalidate(current.apiKey);
     return { project: withDsn(project) };
   });
 };
