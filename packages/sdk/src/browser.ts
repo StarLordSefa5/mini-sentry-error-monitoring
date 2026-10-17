@@ -12,9 +12,12 @@ const KEEPALIVE_LIMIT = 60 * 1024;
 
 const fetchTransport: Transport = async (event, dsn) => {
   const body = JSON.stringify(event);
-  if (unacknowledged.size < MAX_UNACKNOWLEDGED) {
-    unacknowledged.set(event.eventId, { endpoint: dsn.endpoint, body });
+  // When full, drop the oldest (Maps keep insertion order) so the newest events keep their retry.
+  if (unacknowledged.size >= MAX_UNACKNOWLEDGED) {
+    const oldest = unacknowledged.keys().next().value;
+    if (oldest !== undefined) unacknowledged.delete(oldest);
   }
+  unacknowledged.set(event.eventId, { endpoint: dsn.endpoint, body });
 
   // A string body is sent as text/plain, which keeps this a CORS "simple request": no preflight.
   const response = await fetch(dsn.endpoint, {
