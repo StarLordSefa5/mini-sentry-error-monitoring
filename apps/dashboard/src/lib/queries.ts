@@ -197,3 +197,22 @@ export function useUpdateIssueStatus(projectId: string, issueId: string) {
     },
   });
 }
+
+export function useUpdateProject(projectId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: { name?: string; alertWebhookUrl?: string | null }) =>
+      (await api<{ project: ProjectDto }>(`/projects/${projectId}`, { method: "PATCH", body }))
+        .project,
+    onSuccess: (project) => {
+      client.setQueryData(keys.project(projectId), project);
+      void client.invalidateQueries({ queryKey: keys.projects, exact: true });
+    },
+  });
+}
+
+export function useTestAlert(projectId: string) {
+  return useMutation({
+    mutationFn: () => api<void>(`/projects/${projectId}/alerts/test`, { method: "POST" }),
+  });
+}

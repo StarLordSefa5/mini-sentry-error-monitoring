@@ -3,6 +3,7 @@ import type { EventDto, IssueStatus, StatsRange } from "@mini-sentry/shared";
 import { ArrowLeftIcon, CheckIcon, EyeOffIcon, RotateCcwIcon } from "lucide-react";
 import { Link, useParams } from "react-router";
 import { toast } from "sonner";
+import { BreadcrumbsList } from "@/components/breadcrumbs-list";
 import { EventsChart } from "@/components/events-chart";
 import { StackTrace } from "@/components/stack-trace";
 import { ErrorState } from "@/components/states";
@@ -76,18 +77,34 @@ export function IssueDetailPage() {
       <ChartCard projectId={projectId} issueId={issueId} />
 
       <div className="grid gap-6 lg:grid-cols-3">
-        <Card className="min-w-0 lg:col-span-2 lg:self-start">
-          <CardHeader>
-            <CardTitle>Stack trace</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {latestEvent ? (
-              <StackTrace frames={latestEvent.frames} raw={latestEvent.stack} />
-            ) : (
-              <p className="text-sm text-muted-foreground">No events stored for this issue.</p>
-            )}
-          </CardContent>
-        </Card>
+        <div className="min-w-0 space-y-6 lg:col-span-2">
+          <Card className="min-w-0">
+            <CardHeader>
+              <CardTitle>Stack trace</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {latestEvent ? (
+                <StackTrace frames={latestEvent.frames} raw={latestEvent.stack} />
+              ) : (
+                <p className="text-sm text-muted-foreground">No events stored for this issue.</p>
+              )}
+            </CardContent>
+          </Card>
+          {latestEvent && (
+            <Card className="min-w-0">
+              <CardHeader>
+                <CardTitle>Breadcrumbs</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <BreadcrumbsList
+                  breadcrumbs={latestEvent.breadcrumbs}
+                  errorTime={latestEvent.timestamp}
+                  errorLabel={`${latestEvent.type}: ${latestEvent.message}`}
+                />
+              </CardContent>
+            </Card>
+          )}
+        </div>
         <div className="space-y-6">
           {latestEvent && <LatestEventCard event={latestEvent} />}
           <BreakdownCard projectId={projectId} issueId={issueId} />

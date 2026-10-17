@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import type { ProjectDto } from "@mini-sentry/shared";
-import { CheckIcon, CopyIcon, RefreshCwIcon, SendIcon } from "lucide-react";
+import { BellIcon, CheckIcon, CopyIcon, RefreshCwIcon, SendIcon } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import { ErrorState } from "@/components/states";
@@ -16,9 +16,12 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useProject, useRotateKey } from "@/lib/queries";
+import { ApiError } from "@/lib/api";
+import { useProject, useRotateKey, useTestAlert, useUpdateProject } from "@/lib/queries";
 
 const SDK_PACKAGE = "@mini-sentry/sdk";
 
@@ -36,6 +39,7 @@ export function SettingsPage() {
         <p className="text-muted-foreground">{project.name}</p>
       </div>
       <SetupCard project={project} />
+      <AlertsCard project={project} />
       <KeysCard project={project} />
     </div>
   );
@@ -141,6 +145,90 @@ function TestEventButton({ project }: { project: ProjectDto }) {
         Go to issues
       </Link>
     </div>
+  );
+}
+
+function AlertsCard({ project }: { project: ProjectDto }) {
+  const [url, setUrl] = useState(project.alertWebhookUrl ?? "");
+  const update = useUpdateProject(project.id);
+  const test = useTestAlert(project.id);
+  const saved = project.alertWebhookUrl ?? "";
+  const dirty = url.trim() !== saved;
+
+  const save = (e: FormEvent) => {
+    e.preventDefault();
+    update.mutate(
+      { alertWebhookUrl: url.trim() || null },
+      {
+        onSuccess: (p) =>
+          toast.success(p.alertWebhookUrl ? "Alerts turned on" : "Alerts turned off"),
+      },
+    );
+  };
+
+  const saveError =
+    update.error instanceof ApiError
+      ? (update.error.detail ?? "Could not save the webhook.")
+      : update.error
+        ? "Could not save the webhook."
+        : null;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Alerts</CardTitle>
+        <CardDescription>
+          Get a message in Discord or Slack when a new issue appears or a resolved issue comes back.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={save} className="space-y-3">
+          <div className="space-y-2">
+            <Label htmlFor="webhook">Webhook URL</Label>
+            <Input
+              id="webhook"
+              type="url"
+              inputMode="url"
+              placeholder="https://discord.com/api/webhooks/… or https://hooks.slack.com/services/…"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              aria-invalid={saveError ? true : undefined}
+              aria-describedby="webhook-help"
+            />
+            <p id="webhook-help" className="text-sm text-muted-foreground">
+              Discord: channel settings → Integrations → Webhooks. Slack: an app with Incoming
+              Webhooks. Leave empty to turn alerts off.
+            </p>
+            {saveError && (
+              <p role="alert" className="text-sm text-destructive">
+                {saveError}
+              </p>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button type="submit" disabled={!dirty || update.isPending}>
+              {update.isPending ? "Saving…" : "Save"}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={!saved || dirty || test.isPending}
+              onClick={() =>
+                test.mutate(undefined, {
+                  onSuccess: () => toast.success("Test notification sent"),
+                  onError: (err) =>
+                    toast.error("The webhook did not accept the message", {
+                      description: err instanceof ApiError ? err.detail : undefined,
+                    }),
+                })
+              }
+            >
+              <BellIcon /> {test.isPending ? "Sending…" : "Send test notification"}
+            </Button>
+          </div>
+        </form>
+      </CardContent>
+    </Card>
   );
 }
 
