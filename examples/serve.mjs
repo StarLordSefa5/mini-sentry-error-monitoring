@@ -2,7 +2,7 @@
 // /sdk/. Nothing else in the repo is reachable.
 import { createReadStream, statSync } from "node:fs";
 import { createServer } from "node:http";
-import { extname, join, normalize, resolve } from "node:path";
+import { extname, join, normalize, resolve, sep } from "node:path";
 
 const here = import.meta.dirname;
 const roots = {
@@ -13,10 +13,17 @@ const types = { ".html": "text/html", ".js": "text/javascript", ".map": "applica
 const port = Number(process.env.PORT ?? 5500);
 
 createServer((req, res) => {
-  const pathname = decodeURIComponent(new URL(req.url ?? "/", "http://x").pathname);
+  let pathname;
+  try {
+    pathname = decodeURIComponent(new URL(req.url ?? "/", "http://x").pathname);
+  } catch {
+    res.writeHead(400).end("Bad request");
+    return;
+  }
   const [prefix, root] = Object.entries(roots).find(([p]) => pathname.startsWith(p));
   const file = normalize(join(root, pathname.slice(prefix.length) || "index.html"));
-  if (!file.startsWith(root) || !statSync(file, { throwIfNoEntry: false })?.isFile()) {
+  // Trailing separator, so a sibling such as "browser-old" does not pass as inside "browser".
+  if (!file.startsWith(root + sep) || !statSync(file, { throwIfNoEntry: false })?.isFile()) {
     res.writeHead(404).end("Not found");
     return;
   }
