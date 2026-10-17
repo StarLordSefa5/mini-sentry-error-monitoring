@@ -12,9 +12,11 @@ import { Redis } from "ioredis";
 import { deliverAlert, type AlertResult } from "./alerts.js";
 import { loadConfig } from "./config.js";
 import { processEvent, type ProcessResult } from "./process-event.js";
+import { SourceMapCache } from "./symbolicate.js";
 
 const config = loadConfig();
 const prisma = createPrismaClient(config.DATABASE_URL);
+const sourceMaps = new SourceMapCache(prisma);
 
 // Workers block on Redis, so commands must wait for a reconnect instead of failing.
 const workerConnection = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
@@ -37,7 +39,7 @@ const alerts = new Queue<AlertJobData>(ALERTS_QUEUE, {
 const worker = new Worker<IngestJobData, ProcessResult>(
   EVENTS_QUEUE,
   async (job) => {
-    const result = await processEvent(prisma, job.data);
+    const result = await processEvent(prisma, job.data, sourceMaps);
     if (result.status === "stored" && (result.newIssue || result.regressed)) {
       // Alerts go to their own queue: a slow or failing webhook gets its own retries and never
       // holds up grouping. The event is already committed at this point; if this enqueue fails,
@@ -117,7 +119,10 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     // by BullMQ's stalled-job check and deduplicated by eventId.
     void Promise.all([worker.close(), alertWorker.close()])
       .then(() => Promise.all([deadLetter.close(), alerts.close()]))
-      .then(() => prisma.$disconnect())
+      .then(() => {
+        sourceMaps.close();
+        return prisma.$disconnect();
+      })
       .finally(() => process.exit(0));
   });
 }

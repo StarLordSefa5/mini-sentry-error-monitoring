@@ -17,9 +17,11 @@
     "@mini-sentry/shared": "workspace:*",
     "bullmq": "^6.3.16",
     "ioredis": "^6.0.0",
+    "source-map": "~0.8.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "esbuild": "~0.28.2",
     "tsx": "^4.23.15",
     "vitest": "^5.0.5"
   }

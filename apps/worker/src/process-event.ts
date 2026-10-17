@@ -1,6 +1,7 @@
 import { Prisma, type PrismaClient } from "@mini-sentry/db";
 import type { IngestJobData } from "@mini-sentry/shared";
 import { culprit, fingerprint } from "./fingerprint.js";
+import { symbolicate, type SourceMapCache } from "./symbolicate.js";
 
 export type ProcessResult =
   | {
@@ -24,15 +25,25 @@ export type ProcessResult =
 export async function processEvent(
   prisma: PrismaClient,
   job: IngestJobData,
+  sourceMaps?: SourceMapCache,
 ): Promise<ProcessResult> {
-  const { projectId, event, receivedAt } = job;
+  const { projectId, receivedAt } = job;
 
   // Cheap early exit for the common repeat case; the unique index is the real guarantee.
   const existing = await prisma.event.findUnique({
-    where: { eventId: event.eventId },
+    where: { eventId: job.event.eventId },
     select: { id: true },
   });
   if (existing) return { status: "duplicate" };
+
+  // Before fingerprinting: original file and function names stay the same across builds, while
+  // minified names and bundle hashes change with every deploy.
+  const event = sourceMaps
+    ? {
+        ...job.event,
+        frames: await symbolicate(sourceMaps, projectId, job.event.release, job.event.frames),
+      }
+    : job.event;
 
   const hash = fingerprint(event);
   // Server time, not the client's clock, so a wrong device clock cannot move first/last seen.
