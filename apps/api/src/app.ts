@@ -4,6 +4,7 @@ import { ZodError } from "zod";
 import type { Config } from "./config.js";
 import { sessionPlugin } from "./plugins/session.js";
 import { authRoutes } from "./routes/auth.js";
+import { ingestRoutes } from "./routes/ingest.js";
 import { projectRoutes } from "./routes/projects.js";
 
 export interface AppDeps {
@@ -32,14 +33,21 @@ export async function buildApp({ config, prisma }: AppDeps): Promise<FastifyInst
     return reply.code(statusCode).send({ error: (err as Error).message });
   });
 
-  await app.register(sessionPlugin, { prisma, secureCookie: config.COOKIE_SECURE });
-
   app.get("/health", async () => ({ status: "ok" }));
-  await app.register(authRoutes, { prefix: "/api/auth", prisma });
-  await app.register(projectRoutes, {
-    prefix: "/api/projects",
-    prisma,
-    publicUrl: config.PUBLIC_URL,
+
+  // Ingestion: API-key auth only. Kept outside the session scope so event writes never pay for a
+  // session lookup.
+  await app.register(ingestRoutes, { prefix: "/api", prisma });
+
+  // Dashboard API: cookie sessions.
+  await app.register(async (dashboard) => {
+    await dashboard.register(sessionPlugin, { prisma, secureCookie: config.COOKIE_SECURE });
+    await dashboard.register(authRoutes, { prefix: "/api/auth", prisma });
+    await dashboard.register(projectRoutes, {
+      prefix: "/api/projects",
+      prisma,
+      publicUrl: config.PUBLIC_URL,
+    });
   });
 
   return app;
