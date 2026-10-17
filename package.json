@@ -17,7 +17,9 @@
     "format:check": "prettier --check .",
     "infra:up": "docker compose up -d",
     "infra:down": "docker compose down",
-    "example:browser": "node examples/serve.mjs"
+    "example:browser": "node examples/serve.mjs",
+    "test": "pnpm -r --if-present test",
+    "dev:worker": "pnpm --filter @mini-sentry/worker dev"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

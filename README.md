@@ -2,7 +2,7 @@
 
 Open-source error monitoring service. Add the SDK to your app; errors from real users are sent to the server, grouped into issues by stack-trace fingerprint, shown on a dashboard, and announced on Slack/Discord when something new breaks.
 
-> Status: week 2 of 8. SDK captures errors in the browser and Node.js; events are stored directly (queue arrives in week 3).
+> Status: week 3 of 8. Events go through a Redis queue to a worker that groups them into issues.
 
 ## Architecture
 
@@ -33,20 +33,23 @@ pnpm infra:up      # PostgreSQL + Redis
 pnpm build
 pnpm db:migrate   # apply migrations
 pnpm dev          # API on http://localhost:4000
+pnpm dev:worker   # in a second terminal
 ```
 
 ## Scripts
 
-| Command           | What it does               |
-| ----------------- | -------------------------- |
-| `pnpm dev`        | Run the API in watch mode  |
-| `pnpm db:migrate` | Create/apply migrations    |
-| `pnpm build`      | Build every workspace      |
-| `pnpm typecheck`  | Type-check every workspace |
-| `pnpm lint`       | ESLint across the repo     |
-| `pnpm format`     | Prettier write             |
-| `pnpm infra:up`   | Start PostgreSQL and Redis |
-| `pnpm infra:down` | Stop them                  |
+| Command           | What it does                     |
+| ----------------- | -------------------------------- |
+| `pnpm dev`        | Run the API in watch mode        |
+| `pnpm dev:worker` | Run the worker in watch mode     |
+| `pnpm test`       | Run all tests (needs `infra:up`) |
+| `pnpm db:migrate` | Create/apply migrations          |
+| `pnpm build`      | Build every workspace            |
+| `pnpm typecheck`  | Type-check every workspace       |
+| `pnpm lint`       | ESLint across the repo           |
+| `pnpm format`     | Prettier write                   |
+| `pnpm infra:up`   | Start PostgreSQL and Redis       |
+| `pnpm infra:down` | Stop them                        |
 
 ## Using the SDK
 
@@ -86,6 +89,16 @@ node examples/node/crash.mjs "<DSN>" rejection
 | GET    | `/api/projects/:projectId`                | session |
 | POST   | `/api/projects/:projectId/api-key/rotate` | session |
 
+## How grouping works
+
+The worker computes a SHA-256 fingerprint from:
+
+1. the error type (`TypeError`),
+2. the message with volatile parts replaced: numbers, UUIDs, hex ids, URLs and emails become `<num>`, `<uuid>`, …,
+3. the top 5 in-app frames as `file:function`. Frames from `node_modules` and `node:` internals are skipped when app frames exist. File names lose their host, query string and bundler content hash (`app-BxK3a9Qz.js` becomes `app.js`).
+
+Line and column numbers are left out on purpose: editing an unrelated part of a file shifts every line below it, and that must not split one issue into two after a deploy. Same fingerprint, same issue. The rules are covered by unit tests in [`fingerprint.test.ts`](apps/worker/src/fingerprint.test.ts).
+
 ## Design decisions
 
 - **Fastify over Express.** The ingestion endpoint takes the most load in the system; Fastify has lower per-request overhead and built-in schema-friendly hooks.
@@ -101,3 +114,9 @@ node examples/node/crash.mjs "<DSN>" rejection
 - **Stack traces are parsed in the SDK** (V8 and Firefox/Safari formats) into frames, and the raw stack is kept too, so the server can re-parse later.
 - **The SDK never throws.** Transport failures are swallowed and the same error object is reported once, so error reporting cannot create new errors or loops.
 - **The published SDK has no private dependencies.** `tsup` inlines the shared wire types into its `.d.ts` files and ships ESM + CJS.
+- **Ingestion answers `202 Accepted` after a Redis write.** The API validates, checks the key and enqueues (BullMQ); the worker does the database work. API latency no longer depends on Postgres load, and a traffic spike becomes a longer queue instead of failed requests. If Redis is down the API answers 503 right away instead of hanging.
+- **API keys are cached in memory** (60 s, unknown keys 10 s), so ingestion does not query Postgres per event. Rotating a key evicts it on that instance; other instances accept the old key until their entry expires.
+- **Retries and a dead-letter queue.** Jobs get 5 attempts with exponential backoff. A job that fails every attempt is copied to `events-dead-letter` with the failure reason, so it can be inspected and replayed instead of being lost.
+- **Exactly-once counting on an at-least-once queue.** BullMQ can run a job twice (a retry, or a worker killed mid-job whose lock expires). The issue upsert and the event insert run in one transaction, and `Event.eventId` is unique: a repeat hits the unique index, the transaction rolls back, and its count increment goes with it. Tested by killing the worker mid-run: 300 sent, 300 stored, `count = 300`.
+- **One SQL statement for the issue upsert.** `INSERT … ON CONFLICT DO UPDATE SET count = count + 1, lastSeen = GREATEST(…)` is atomic, so concurrent events cannot lose increments, and jobs finishing out of order cannot move `lastSeen` backwards.
+- **First/last seen use server receive time**, not the client's `timestamp`, so a device with a wrong clock cannot distort an issue's timeline. The client time is still stored on the event.
