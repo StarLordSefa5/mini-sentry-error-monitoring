@@ -32,15 +32,17 @@ model Session {
 }
 
 model Project {
-  id        String   @id @default(cuid())
-  name      String
+  id              String   @id @default(cuid())
+  name            String
   /// Public key used by the SDK. It ships in browser code, so it only grants event writes.
-  apiKey    String   @unique
-  ownerId   String
-  owner     User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
-  issues    Issue[]
-  events    Event[]
+  apiKey          String   @unique
+  ownerId         String
+  owner           User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  /// Discord or Slack incoming webhook notified on new issues and regressions.
+  alertWebhookUrl String?
+  createdAt       DateTime @default(now())
+  issues          Issue[]
+  events          Event[]
 
   @@index([ownerId])
 }
@@ -92,6 +94,8 @@ model Event {
   userAgent   String?
   release     String?
   environment String?
+  /// What happened just before the error (clicks, requests, logs), oldest first.
+  breadcrumbs Json?
   timestamp   DateTime
   receivedAt  DateTime @default(now())
 
