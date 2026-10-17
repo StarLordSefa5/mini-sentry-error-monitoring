@@ -40,3 +40,20 @@ export interface Issue {
   firstSeen: string;
   lastSeen: string;
 }
+
+/** BullMQ queue the API writes accepted events to. */
+export const EVENTS_QUEUE = "events";
+/** Events whose processing failed on every attempt, kept for inspection and replay. */
+export const EVENTS_DEAD_LETTER_QUEUE = "events-dead-letter";
+
+export interface IngestJobData {
+  projectId: string;
+  event: ErrorEvent;
+  /** ISO time the API accepted the event. Issue first/last seen use this, not the client clock. */
+  receivedAt: string;
+}
+
+export interface DeadLetterJobData extends IngestJobData {
+  failedReason: string;
+  attemptsMade: number;
+}
