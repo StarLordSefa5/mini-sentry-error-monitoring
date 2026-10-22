@@ -204,3 +204,22 @@ Line and column numbers are left out on purpose: editing an unrelated part of a 
 - **Parsed source maps are cached in the worker** (LRU, 50 maps). Parsing a large map takes milliseconds and the WebAssembly-backed parser needs explicit cleanup, so maps are parsed once, concurrent frames share one parse, and evicted maps are destroyed. A missing map is remembered for a minute.
 - **Function names come from the original source, not the map's `names`.** A map names the token at the error position (often a property such as `total`), so the worker scans the original code upwards for the enclosing function, arrow or method declaration.
 - **Source maps are stored in Postgres** for simplicity. Object storage (S3) would be the next step for large apps.
+
+## Load test
+
+`load/ingest.js` sends events to the ingestion endpoint with [k6](https://k6.io) (50 virtual users, 30 seconds, everything on one laptop):
+
+```bash
+k6 run -e PROJECT=<projectId> -e KEY=<apiKey> load/ingest.js
+```
+
+| Metric                                          | Result                                        |
+| ----------------------------------------------- | --------------------------------------------- |
+| Events accepted by the API                      | ~5,700 / s, 0% errors                         |
+| API response time                               | p95 13 ms                                     |
+| Events processed by one worker (concurrency 10) | ~235 / s                                      |
+| Events lost                                     | 0 (172,505 sent, 172,505 stored in one issue) |
+
+The API only validates and enqueues, so it answers fast; the worker catches up from the Redis queue. To process faster, run more workers on the same queue.
+
+Raise `RATE_LIMIT_PER_MINUTE` before running it, or the limiter rejects everything after the first 1,000 events per minute.
