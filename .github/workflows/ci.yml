@@ -1,0 +1,19 @@
+name: CI                      # Robotun adı, GitHub'da böyle görünecek
+
+on: [push, pull_request]      # Ne zaman çalışsın? Her push'ta ve her PR'da
+
+jobs:
+  check:
+    runs-on: ubuntu-latest    # Robotun bilgisayarı: temiz bir Linux
+    steps:
+      - uses: actions/checkout@v4          # 1. Kodu indir
+      - uses: pnpm/action-setup@v4         # 2. pnpm'i kur (sürümü package.json'dan okur)
+      - uses: actions/setup-node@v4        # 2. Node'u kur
+        with:
+          node-version: 22
+          cache: pnpm                      # Paketleri hatırla, sonraki sefer daha hızlı olsun
+      - run: pnpm install --frozen-lockfile   # 3. Kilit dosyasındaki sürümleri birebir kur
+      - run: pnpm build                       # 4
+      - run: pnpm lint                        # 5
+      - run: pnpm typecheck                   # 6
+      - run: pnpm test                        # 7
