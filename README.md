@@ -1,5 +1,7 @@
 # Mini Sentry
 
+[![CI](https://github.com/StarLordSefa5/mini-sentry-error-monitoring/actions/workflows/ci.yml/badge.svg)](https://github.com/StarLordSefa5/mini-sentry-error-monitoring/actions/workflows/ci.yml)
+
 Open-source error monitoring service. Add the SDK to your app; errors from real users are sent to the server, grouped into issues by stack-trace fingerprint, shown on a dashboard, and announced on Slack/Discord when something new breaks.
 
 > Status: week 7 of 8. Adds source map support and prepares the SDK and CLI for npm.
