@@ -1,19 +1,40 @@
-name: CI                      # Robotun adı, GitHub'da böyle görünecek
+name: CI
 
-on: [push, pull_request]      # Ne zaman çalışsın? Her push'ta ve her PR'da
+on: [push, pull_request]
 
 jobs:
   check:
-    runs-on: ubuntu-latest    # Robotun bilgisayarı: temiz bir Linux
+    runs-on: ubuntu-latest
+
+    # YENİ: Robotun yanında çalışan Postgres ve Redis (senin Docker'ının yaptığı iş)
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: minisentry
+          POSTGRES_PASSWORD: minisentry
+          POSTGRES_DB: minisentry
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U minisentry" --health-interval 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+
+    # YENİ: Senin .env dosyandaki adreslerin aynısı
+    env:
+      DATABASE_URL: postgresql://minisentry:minisentry@localhost:5432/minisentry
+      REDIS_URL: redis://localhost:6379
+
     steps:
-      - uses: actions/checkout@v4          # 1. Kodu indir
-      - uses: pnpm/action-setup@v4         # 2. pnpm'i kur (sürümü package.json'dan okur)
-      - uses: actions/setup-node@v4        # 2. Node'u kur
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm                      # Paketleri hatırla, sonraki sefer daha hızlı olsun
-      - run: pnpm install --frozen-lockfile   # 3. Kilit dosyasındaki sürümleri birebir kur
-      - run: pnpm build                       # 4
-      - run: pnpm lint                        # 5
-      - run: pnpm typecheck                   # 6
-      - run: pnpm test                        # 7
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm --filter @mini-sentry/db migrate:deploy   # YENİ: Boş veritabanında tabloları oluştur
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
